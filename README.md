@@ -84,18 +84,6 @@ and exit status **1** (not verified — the baseline is deliberately wrong).
 | `docs/specs/` | MVP SRS and implementation runbook |
 | `docs/screenshots/` | Demonstration screenshots |
 
-## Not yet implemented
-
-Per the full LegacyWeaver SRS ([docs/specs/MVP_SRS.md](docs/specs/MVP_SRS.md) §2.5),
-this MVP implements only the **Verify** stage. The following are explicitly
-out of scope here:
-
-- COBOL parsing, paragraph segmentation, dependency planning (Perceive/Plan)
-- Java code synthesis
-- Any language model invocation
-- Autonomous repair loop, failure memory, escalation
-- Container sandboxing for untrusted candidate execution
-- CICS, DB2, IMS, VSAM, JCL, inter-program `CALL`
 
 ## Specifications
 
