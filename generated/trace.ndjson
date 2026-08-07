@@ -1,0 +1,6 @@
+{"timestamp": 1786094256.237806, "unit": "*", "node": "perceive", "action": "segment", "duration_seconds": 0.0, "model_calls": 0, "tokens": 0, "memory_hit": false, "outcome": "2 paragraphs found"}
+{"timestamp": 1786094256.2388034, "unit": "*", "node": "plan", "action": "select_units", "duration_seconds": 0.0, "model_calls": 0, "tokens": 0, "memory_hit": false, "outcome": "units=['PROCESS-RECORD']"}
+{"timestamp": 1786094256.2419124, "unit": "PROCESS-RECORD", "node": "synthesise", "action": "generate", "duration_seconds": 0.0, "model_calls": 1, "tokens": 0, "memory_hit": false, "outcome": "ok"}
+{"timestamp": 1786094257.1814075, "unit": "PROCESS-RECORD", "node": "compile", "action": "javac", "duration_seconds": 0.938, "model_calls": 0, "tokens": 0, "memory_hit": false, "outcome": "compile_error"}
+{"timestamp": 1786094258.5504222, "unit": "PROCESS-RECORD", "node": "repair", "action": "attempt_loop", "duration_seconds": 1.359, "model_calls": 2, "tokens": 0, "memory_hit": false, "outcome": "repeated patch hash -- model has stopped generating new ideas"}
+{"timestamp": 1786094258.5504222, "unit": "PROCESS-RECORD", "node": "escalate", "action": "give_up", "duration_seconds": 2.297, "model_calls": 0, "tokens": 0, "memory_hit": false, "outcome": "repeated patch hash -- model has stopped generating new ideas"}

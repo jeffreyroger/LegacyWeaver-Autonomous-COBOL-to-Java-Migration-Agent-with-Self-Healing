@@ -1,0 +1,16 @@
+{
+  "step": "M4 - first honest unassisted-synthesis measurement",
+  "date": "2026-08-07",
+  "model": "qwen2.5-coder:7b",
+  "units_synthesized": 1,
+  "units_compiling": 0,
+  "compile_error_detail": "Used unqualified BigDecimal/RoundingMode (no import statement possible/present in scaffold-only-fully-qualified-names convention) -- COMPILE_ERROR class.",
+  "additional_defect_observed_if_it_had_compiled": "No setScale(5, DOWN) applied to ws.appliedRate before use in the premium path -- would reproduce the planted double-truncation trap (T4) as a SCALE-class divergence on premium-tier records.",
+  "j3_latency_sample": {
+    "paragraphs": 1,
+    "model_calls": 1,
+    "wall_clock_seconds": 9.7,
+    "note": "single paragraph, cache miss, cold-ish model. Repair budget 2 attempts/unit -> worst case ~3x9.7s=~29s for this fixture. Under 90s: demo strategy = run live (J3 table)."
+  },
+  "interpretation": "A high divergence/compile-failure count here is the empirical case for the harness's existence, not a bug in the harness (AGENT_LAYER_PLAN.md M4 interpretation note)."
+}

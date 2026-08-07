@@ -65,6 +65,15 @@ REPORT_LAYOUT: tuple[Field, ...] = (
     Field("RL-DORMANT", offset=41, width=1, numeric=False),
 )
 
+# The totals line (the 201st and final report line) has a distinct layout
+# from the 200 detail lines above -- same 42-byte width, different field
+# boundaries. Derived from the TOTALS-LINE declaration in interest.cob.
+TOTALS_LAYOUT: tuple[Field, ...] = (
+    Field("TL-LABEL", offset=0, width=30, numeric=False),
+    Field("TL-TOTAL", offset=30, width=11, numeric=True, decimal_scale=2, signed=True),
+    Field("TL-FILLER", offset=41, width=1, numeric=False),
+)
+
 
 def record_width(layout: tuple[Field, ...]) -> int:
     """Sum of non-REDEFINES field widths -- the declared record length."""

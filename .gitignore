@@ -26,3 +26,8 @@ runs/
 # OS
 .DS_Store
 Thumbs.db
+
+# Java class files
+*.class
+**/build/
+

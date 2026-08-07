@@ -1,0 +1,75 @@
+"""Unit attribution — Step N1.
+
+Only the whole program produces output, so a lone differential run can't
+say which paragraph caused a divergence. The fix: start from the reference
+implementation (K3 -- all bodies known correct, zero divergence), replace
+exactly one body with the candidate under test, and verify. Any divergence
+that appears is attributable to that unit because nothing else changed.
+
+The reference implementation is scaffolding for attribution, not part of
+the product (plan's explicit instruction to state this plainly).
+"""
+
+from __future__ import annotations
+
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+
+from weaver.agent.assemble import assemble
+from weaver.agent.verify import verify_candidate
+from weaver.classification import Classification
+from weaver.report import Report
+
+SCAFFOLD_PATH = Path("generated/Scaffold.java")
+REFERENCE_BODY_PATH = Path("reference/process_record.body.java")
+
+
+@dataclass
+class AttributionResult:
+    unit_id: str
+    report: Report
+    classifications: list[Classification]
+    compiled: bool
+    compile_diagnostics: str | None
+
+
+def verify_unit(unit_id: str, candidate_body: str, work_dir: Path) -> AttributionResult:
+    """Assemble the reference implementation with `unit_id`'s body replaced
+    by `candidate_body`, compile, and verify. All other units keep their
+    known-correct reference bodies, so any resulting divergence is
+    attributable to `unit_id` alone.
+    """
+    bodies = {"PROCESS-RECORD": REFERENCE_BODY_PATH.read_text()}
+    bodies[unit_id] = candidate_body  # overwrite the unit under test
+
+    assembled = assemble(SCAFFOLD_PATH.read_text(), bodies)
+    src_path = work_dir / "Scaffold.java"
+    build_dir = work_dir / "build"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    src_path.write_text(assembled)
+
+    proc = subprocess.run(["javac", "-d", str(build_dir), str(src_path)], capture_output=True, text=True)
+    if proc.returncode != 0:
+        return AttributionResult(unit_id, Report(unit_id, 0), [], False, proc.stderr)
+
+    report, classifications = verify_candidate("Scaffold", build_dir)
+    return AttributionResult(unit_id, report, classifications, True, None)
+
+
+if __name__ == "__main__":
+    import sys
+    from pathlib import Path as _P
+
+    # N1 acceptance test: deliberately corrupt PROCESS-RECORD (skip the
+    # dormant zero-out) and confirm divergences appear, attributed to it.
+    corrupted = REFERENCE_BODY_PATH.read_text().replace(
+        'ws.interest = java.math.BigDecimal.ZERO.setScale(2);',
+        'ws.interest = new java.math.BigDecimal("999.99");  // deliberately wrong',
+    )
+    result = verify_unit("PROCESS-RECORD", corrupted, _P("generated/attribution_test"))
+    print(f"unit={result.unit_id} compiled={result.compiled} "
+          f"divergences={result.report.divergence_count}")
+    assert result.compiled
+    assert result.report.divergence_count > 0, "corruption should have produced divergences"
+    print("N1 acceptance test: PASS -- corruption attributed to PROCESS-RECORD")

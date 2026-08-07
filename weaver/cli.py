@@ -21,6 +21,7 @@ from rich.table import Table
 from weaver.classification import classify, summarize
 from weaver.comparison import compare_lines, normalize_line_endings
 from weaver.execution import run_candidate, run_oracle
+from weaver.layout import REPORT_LAYOUT, TOTALS_LAYOUT
 from weaver.report import Report
 
 console = Console()
@@ -96,8 +97,9 @@ def run_verify(args: argparse.Namespace) -> int:
         o_line = normalize_line_endings(oracle_lines[i]) if i < len(oracle_lines) else ""
         c_line = normalize_line_endings(candidate_lines[i]) if i < len(candidate_lines) else ""
         causing_input = input_lines[i] if i < len(input_lines) else None
+        layout = REPORT_LAYOUT if i < len(input_lines) else TOTALS_LAYOUT
 
-        div = compare_lines(i, o_line, c_line, causing_input)
+        div = compare_lines(i, o_line, c_line, causing_input, layout=layout)
         if div is not None:
             report.add_divergence(div)
             classifications.append(classify(div))

@@ -1,23 +1,38 @@
-# CLAUDE.md — Working rules for LegacyWeaver MVP
+# CLAUDE.md — Working rules for LegacyWeaver
 
 These rules are binding for every session working in this repository.
 
-## The two governing documents
+## The governing documents
 
-- [docs/specs/MVP_SRS.md](docs/specs/MVP_SRS.md) — what must be true (requirements, acceptance criteria).
-- [docs/specs/MVP_IMPLEMENTATION_PLAN.md](docs/specs/MVP_IMPLEMENTATION_PLAN.md) — how and in what order to build it (phases, steps, owners, acceptance tests).
+- [docs/specs/MVP_SRS.md](docs/specs/MVP_SRS.md) — what must be true (requirements, acceptance criteria) for the MVP (Phase 1).
+- [docs/specs/MVP_IMPLEMENTATION_PLAN.md](docs/specs/MVP_IMPLEMENTATION_PLAN.md) — how and in what order to build the MVP (phases A–I, owners, acceptance tests).
+- [docs/specs/AGENT_LAYER_PLAN.md](docs/specs/AGENT_LAYER_PLAN.md) — how and in what order to build the agent layer (Phase 2: phases J–T — local inference, deterministic scaffold, synthesis, repair loop, failure memory, orchestrator, escalation, measurement, memory demo, demo prep).
 
-**Before making any implementation decision, re-check both documents.** Do not
-improvise scope, architecture, numbers, or sequencing that isn't in them. If
-something is genuinely unspecified, say so explicitly rather than inventing it.
+**Before making any implementation decision, re-check the relevant document(s).**
+Do not improvise scope, architecture, numbers, or sequencing that isn't in
+them. If something is genuinely unspecified, say so explicitly rather than
+inventing it.
+
+## Phase 2 is now authorized
+
+MVP Phase 1 (A–I) is complete — oracle verified, differential runner
+reporting 132/201 against this repo's own fixture (see rule 6 below), zero
+false positives. Per explicit user direction on 2026-08-07, work on the agent
+layer (`AGENT_LAYER_PLAN.md`, phases J–T: synthesis, repair loop, failure
+memory, orchestrator) is now in scope and authorized. The prior blanket
+prohibition on starting this work no longer applies. All hard rules below
+that are specific to the MVP harness (comparison contract, deterministic
+classification, exact-decimal arithmetic, layout-as-data, offline operation)
+remain binding for Phase 2 as well — the agent layer is built *around* that
+harness, not as a replacement for it.
 
 ## Hard rules
 
-1. **Follow the runbook phase order.** A, B, C, D, E, F, G, H, I — in that
-   order, per the critical path (`MVP_IMPLEMENTATION_PLAN.md` "Critical path"
-   section). Do not start a step until its prerequisites pass their acceptance
-   tests. Do not start the repair loop or anything from the full SRS ([R4]) —
-   it is explicitly out of scope (SRS §2.5).
+1. **Follow each plan's phase order.** MVP: A, B, C, D, E, F, G, H, I, per the
+   critical path (`MVP_IMPLEMENTATION_PLAN.md` "Critical path" section).
+   Agent layer: J, K, L, M, N, O, P, Q, R, S, T, per `AGENT_LAYER_PLAN.md`.
+   Do not start a step until its prerequisites' acceptance tests actually
+   pass. Do not pull forward work from a later phase.
 
 2. **Every step must pass its stated acceptance test before moving on.**
    Acceptance tests are not optional checkpoints — they are the definition of
@@ -52,12 +67,26 @@ something is genuinely unspecified, say so explicitly rather than inventing it.
    runbook's for all subsequent steps:**
 
    - Golden output checksum: `833afd92bd7879187d450107f9f572d3bdbbdcc0a44804d363c264df3d7461b1`
-     (see `fixtures/data/expected/golden_interest.out.sha256`)
-   - Predicted oracle-vs-baseline divergence (Step C4): **131 of 200**
-     (see `fixtures/predict_divergence.py` output — 131 interest-value
-     mismatches, 28 of them also carrying a balance-sign mismatch)
-   - Phase D's differential runner must independently reproduce **131**,
-     the same way the runbook requires the runner to reproduce its 113.
+     (see `fixtures/data/expected/golden_interest.out.sha256`) — reconfirmed
+     by 10 consecutive independent runs of the compiled oracle.
+   - Predicted oracle-vs-baseline divergence (Step C4), **among the 200
+     detail records only**: **131 of 200** (see `fixtures/predict_divergence.py`
+     output — 131 interest-value mismatches, 28 of them also carrying a
+     balance-sign mismatch). `predict_divergence.py` deliberately only
+     iterates the 200 input records; it does not model the derived totals
+     line.
+   - Phase D's differential runner compares all **201** report lines (200
+     detail + 1 totals) and independently reports **132**: the same 131
+     detail-line divergences C4 predicted, plus one further divergence on
+     the totals line itself (`TL-TOTAL`) — the baseline's float summation
+     of 200 already-wrong interest values necessarily disagrees with the
+     oracle's exact-decimal total. This is not drift from 131; it is 131
+     plus one additional, independently-explained divergence outside
+     C4's prediction scope. Confirmed by isolating record index 200 in
+     the runner's output on 2026-08-07.
+   - `tests/test_acceptance.py::test_full_pipeline_against_real_fixture`
+     asserts `total_records == 201` and `divergence_count == 132`; treat
+     132 (not 131) as the number Phase D/F/H must reproduce end-to-end.
 
    If an implementation produces a number that matches neither the
    runbook's reference NOR this repo's own previously-established number,
@@ -98,9 +127,10 @@ something is genuinely unspecified, say so explicitly rather than inventing it.
     enumerate every deviation the file actually contains, no more, no less.
 
 12. **Scope stays disclosed (FR-20, DC-6).** Do not let the README, code
-    comments, or any output imply the MVP does more than SRS §1.2 states.
-    Repair, failure memory, model synthesis, and sandboxing stay explicitly
-    marked as not implemented.
+    comments, or any output claim a component works before it has passed its
+    own acceptance test in `AGENT_LAYER_PLAN.md`. Anything not yet built
+    (e.g. sandboxing, if never scoped into a phase) stays explicitly marked
+    as not implemented rather than implied.
 
 ## Before starting any step
 
