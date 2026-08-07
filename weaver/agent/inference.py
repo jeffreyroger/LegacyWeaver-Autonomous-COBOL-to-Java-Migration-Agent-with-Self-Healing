@@ -41,6 +41,7 @@ class InferenceRequest:
     prompt: str
     model: str = DEFAULT_MODEL
     schema: dict[str, Any] | None = None  # JSON schema for grammar-constrained output (M2)
+    seed: int = SEED
 
     def payload(self) -> dict[str, Any]:
         p: dict[str, Any] = {
@@ -48,7 +49,7 @@ class InferenceRequest:
             "prompt": self.prompt,
             "stream": False,
             "options": {
-                "seed": SEED,
+                "seed": self.seed,
                 "temperature": TEMPERATURE,
                 "top_p": TOP_P,
                 "num_ctx": NUM_CTX,

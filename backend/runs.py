@@ -19,6 +19,7 @@ from weaver.agent.attribution import verify_unit
 from weaver.agent.memory import MemoryCase, embed
 from weaver.agent.metrics import compute_metrics
 from weaver.agent.orchestrator import Orchestrator, UnitResult
+from weaver.agent.runspec import RunSpec
 from weaver.agent.signature import build_signature
 from weaver.classification import Classification, DefectClass
 from weaver.report import Report
@@ -218,10 +219,12 @@ class RunManager:
             record.lifecycle = "RUNNING"
             self._write_lifecycle(record)
             try:
-                orchestrator = Orchestrator(
+                spec = RunSpec.default().replace(
                     cobol_source=Path(record.request.cobol_source),
-                    scaffold_path=Path("generated/Scaffold.java"),
-                    memory_store_path=Path("generated/failure_memory.json"),
+                    input_data=Path(record.request.data_file),
+                )
+                orchestrator = Orchestrator(
+                    spec=spec,
                     trace_path=record.trace_path,
                     state_path=record.state_path,
                     on_event=lambda event: record.event_bus.publish(event),
@@ -298,10 +301,12 @@ class RunManager:
             record.lifecycle = "RUNNING"
             self._write_lifecycle(record)
             try:
-                orchestrator = Orchestrator(
+                spec = RunSpec.default().replace(
                     cobol_source=Path(record.request.cobol_source),
-                    scaffold_path=Path("generated/Scaffold.java"),
-                    memory_store_path=Path("generated/failure_memory.json"),
+                    input_data=Path(record.request.data_file),
+                )
+                orchestrator = Orchestrator(
+                    spec=spec,
                     trace_path=record.trace_path,
                     state_path=record.state_path,
                     on_event=lambda event: record.event_bus.publish(event),

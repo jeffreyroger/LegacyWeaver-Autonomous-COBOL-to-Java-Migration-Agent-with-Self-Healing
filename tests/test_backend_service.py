@@ -25,6 +25,7 @@ import backend.runs as runs_module
 from backend.app import app
 from backend.runs import RunManager
 from weaver.agent.orchestrator import UnitResult
+from weaver.agent.runspec import RunSpec
 
 # Captured before the autouse fixture below monkeypatches _check_toolchain
 # for every test in this file -- the version-detection tests need the real
@@ -34,9 +35,7 @@ _real_check_toolchain = app_module._check_toolchain
 
 @dataclass
 class FakeOrchestrator:
-    cobol_source: Path
-    scaffold_path: Path
-    memory_store_path: Path
+    spec: RunSpec
     trace_path: Path
     state_path: Path
     on_event: object = None

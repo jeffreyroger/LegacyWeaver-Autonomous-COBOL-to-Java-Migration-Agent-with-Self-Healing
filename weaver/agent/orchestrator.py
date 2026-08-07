@@ -25,6 +25,7 @@ from weaver.agent.inference import InferenceClient
 from weaver.agent.memory import FailureMemory, MemoryCase, embed
 from weaver.agent.memory_repair import try_memory_repair
 from weaver.agent.repair_loop import repair_unit
+from weaver.agent.runspec import RunSpec
 from weaver.agent.segment import Paragraph, segment
 from weaver.agent.signature import build_signature
 from weaver.agent.synthesize import synthesize_paragraph
@@ -32,6 +33,7 @@ from weaver.report import Report
 
 STATE_PATH = Path("generated/orchestrator_state.json")
 TRACE_PATH = Path("generated/trace.ndjson")
+RUNS_ROOT = Path("runs")  # FR-8.1: runs/<run_id>/trace.jsonl
 
 
 @dataclass
@@ -48,9 +50,7 @@ class UnitResult:
 
 @dataclass
 class Orchestrator:
-    cobol_source: Path
-    scaffold_path: Path
-    memory_store_path: Path
+    spec: RunSpec = field(default_factory=RunSpec.default)
     trace_path: Path = TRACE_PATH
     state_path: Path = STATE_PATH
     results: dict[str, UnitResult] = field(default_factory=dict)
@@ -58,14 +58,21 @@ class Orchestrator:
     cancel_requested: threading.Event | None = None
     fresh_trace: bool = True
 
+    @property
+    def cobol_source(self) -> Path:
+        return self.spec.cobol_source
+
     def __post_init__(self) -> None:
         self.trace_path.parent.mkdir(parents=True, exist_ok=True)
         if self.fresh_trace:
             self.trace_path.write_text("")  # fresh trace per run
         else:
             self.trace_path.touch(exist_ok=True)  # resume: append, never truncate
-        self.client = InferenceClient(cache_dir=Path("generated/model_cache"))
-        self.memory = FailureMemory(self.memory_store_path)
+        self.client = InferenceClient(
+            cache_dir=Path("generated/model_cache"),
+            replay_only=self.spec.replay,
+        )
+        self.memory = FailureMemory(self.spec.memory_store_path)
 
     def _emit(self, unit_id: str, node: str, action: str, duration: float,
                model_calls: int = 0, tokens: int = 0, memory_hit: bool = False,
@@ -119,7 +126,8 @@ class Orchestrator:
 
         # compile + verify (attribution)
         t0 = time.monotonic()
-        result = verify_unit(unit.identifier, body, Path(f"generated/orchestrator/{unit.identifier}/synthesis"))
+        result = verify_unit(unit.identifier, body, Path(f"generated/orchestrator/{unit.identifier}/synthesis"),
+                              spec=self.spec)
         self._emit(unit.identifier, "compile", "javac", time.monotonic() - t0,
                     outcome="ok" if result.compiled else "compile_error")
 
@@ -156,7 +164,7 @@ class Orchestrator:
         # repair (N2/N3/N4)
         t0 = time.monotonic()
         outcome = repair_unit(unit.identifier, unit, body, result, self.client,
-                               Path(f"generated/orchestrator/{unit.identifier}/repair"))
+                               Path(f"generated/orchestrator/{unit.identifier}/repair"), spec=self.spec)
         model_calls += sum(1 for a in outcome.attempts if "model" in a.outcome or "compile_error" in a.outcome)
         self._emit(unit.identifier, "repair", "attempt_loop", time.monotonic() - t0,
                     model_calls=model_calls,
@@ -232,11 +240,7 @@ class Orchestrator:
 
 
 if __name__ == "__main__":
-    orchestrator = Orchestrator(
-        cobol_source=Path("fixtures/cobol/interest.cob"),
-        scaffold_path=Path("generated/Scaffold.java"),
-        memory_store_path=Path("generated/failure_memory.json"),
-    )
+    orchestrator = Orchestrator(spec=RunSpec.default())
     results = orchestrator.run()
     for unit_id, r in results.items():
         print(f"{unit_id}: {r.status} (model_calls={r.model_calls}, memory_hit={r.memory_hit}, "

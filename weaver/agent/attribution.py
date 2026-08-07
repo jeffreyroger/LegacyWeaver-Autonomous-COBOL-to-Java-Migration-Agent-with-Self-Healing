@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from weaver.agent.assemble import assemble
+from weaver.agent.runspec import RunSpec
 from weaver.agent.verify import verify_candidate
 from weaver.classification import Classification
 from weaver.report import Report
@@ -34,16 +35,23 @@ class AttributionResult:
     compile_diagnostics: str | None
 
 
-def verify_unit(unit_id: str, candidate_body: str, work_dir: Path) -> AttributionResult:
+def verify_unit(unit_id: str, candidate_body: str, work_dir: Path,
+                *, spec: RunSpec | None = None) -> AttributionResult:
     """Assemble the reference implementation with `unit_id`'s body replaced
     by `candidate_body`, compile, and verify. All other units keep their
     known-correct reference bodies, so any resulting divergence is
     attributable to `unit_id` alone.
+
+    `spec` supplies the scaffold, input data, and golden output. Defaults to
+    RunSpec.default() so existing call sites keep working; it is threaded
+    explicitly so a caller-supplied path is never silently ignored.
     """
+    spec = spec or RunSpec.default()
+
     bodies = {"PROCESS-RECORD": REFERENCE_BODY_PATH.read_text()}
     bodies[unit_id] = candidate_body  # overwrite the unit under test
 
-    assembled = assemble(SCAFFOLD_PATH.read_text(), bodies)
+    assembled = assemble(spec.scaffold_path.read_text(), bodies)
     src_path = work_dir / "Scaffold.java"
     build_dir = work_dir / "build"
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -53,7 +61,11 @@ def verify_unit(unit_id: str, candidate_body: str, work_dir: Path) -> Attributio
     if proc.returncode != 0:
         return AttributionResult(unit_id, Report(unit_id, 0), [], False, proc.stderr)
 
-    report, classifications = verify_candidate("Scaffold", build_dir)
+    report, classifications = verify_candidate(
+        "Scaffold", build_dir,
+        golden_output=spec.golden_output,
+        input_data=spec.input_data,
+    )
     return AttributionResult(unit_id, report, classifications, True, None)
 
 

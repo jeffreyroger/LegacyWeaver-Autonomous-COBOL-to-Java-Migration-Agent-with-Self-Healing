@@ -25,6 +25,7 @@ from weaver.agent.inference import InferenceClient, InferenceRequest
 from weaver.agent.prompt import SYNTHESIS_SCHEMA
 from weaver.agent.repair_deterministic import try_deterministic_repair
 from weaver.agent.repair_model import RepairAttempt, build_repair_prompt
+from weaver.agent.runspec import RunSpec
 from weaver.agent.segment import Paragraph
 from weaver.agent.validate import auto_qualify, ValidationError, parse_response, regeneration_hint, static_reject
 from weaver.classification import Classification
@@ -63,7 +64,12 @@ def repair_unit(
     initial_result: AttributionResult,
     client: InferenceClient,
     work_dir: Path,
+    *,
+    spec: RunSpec | None = None,
 ) -> RepairOutcome:
+    spec = spec or RunSpec.default()
+    max_repairs = spec.max_repairs
+
     start_time = time.monotonic()
     attempts: list[RepairAttempt] = []
     seen_hashes: set[str] = {_body_hash(initial_body)}
@@ -75,7 +81,7 @@ def repair_unit(
     def _report_of(r: AttributionResult) -> Report | None:
         return r.report if r.compiled else None
 
-    for attempt_number in range(1, MAX_ATTEMPTS + 1):
+    for attempt_number in range(1, max_repairs + 1):
         if time.monotonic() - start_time > WALL_CLOCK_CAP_SECONDS:
             return RepairOutcome(unit_id, False, best_body, attempts, True, "wall-clock cap exceeded",
                                   final_report=_report_of(best_result))
@@ -136,7 +142,7 @@ def repair_unit(
 
         # --- verify against the FULL input set ---
         attempt_dir = work_dir / f"attempt_{attempt_number}"
-        result = verify_unit(unit_id, new_body, attempt_dir)
+        result = verify_unit(unit_id, new_body, attempt_dir, spec=spec)
 
         if not result.compiled:
             attempts.append(RepairAttempt(attempt_number, new_body, "compile_error", result.compile_diagnostics))
@@ -166,6 +172,6 @@ def repair_unit(
 
     return RepairOutcome(
         unit_id, False, best_body, attempts, True,
-        f"attempt budget ({MAX_ATTEMPTS}) exhausted",
+        f"attempt budget ({max_repairs}) exhausted",
         final_report=_report_of(best_result),
     )
