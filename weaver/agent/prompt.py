@@ -12,10 +12,12 @@ true whenever this prompt changes.
 
 from __future__ import annotations
 
+import re
+
 from weaver.agent.data_context import DataContext, WORKING_STORAGE_FIELDS
 from weaver.agent.scaffold import ConditionName
 from weaver.agent.segment import Paragraph
-from weaver.layout import INPUT_LAYOUT, Field
+from weaver.layout import INPUT_LAYOUT, REPORT_LAYOUT, TOTALS_LAYOUT, Field
 
 # Java accessor for each known identifier, keyed by COBOL name. Working-
 # storage targets the paragraph is allowed to mutate are listed separately
@@ -30,6 +32,36 @@ _WS_ACCESSORS = {
 _WS_SCAFFOLD_OWNED = {"WS-TOTAL-INTEREST", "WS-EOF-FLAG"}
 
 _INPUT_ACCESSORS = {f.name: f for f in INPUT_LAYOUT}
+
+# Names the scaffold's generated main loop owns: report/totals output
+# fields (constructed via ScaffoldSpec.report_ctor_map / totals_ctor_map,
+# never by the paragraph method) and the accumulator working-storage
+# fields above. A paragraph's COBOL source routinely ends with the
+# MOVE ... TO RL-*/TL-* and WRITE statements that populate those records --
+# real-world testing (2026-08-07) showed the model translates those
+# statements literally (e.g. `rl.id = ar.id; ... reportLine.write();`)
+# because the prompt told it what fields exist but never which trailing
+# statements belong to the scaffold, not the paragraph.
+_SCAFFOLD_OWNED_TARGETS = {f.name for f in REPORT_LAYOUT} | {f.name for f in TOTALS_LAYOUT} | _WS_SCAFFOLD_OWNED
+
+_TO_TARGET_RE = re.compile(r"\bTO\s+([A-Z0-9][A-Z0-9-]*)", re.IGNORECASE)
+_WRITE_RE = re.compile(r"^\s*WRITE\b", re.IGNORECASE)
+
+
+def _scaffold_owned_lines(paragraph: Paragraph) -> list[str]:
+    """Lines in this paragraph's source that MOVE/ADD into a scaffold-owned
+    target (a report/totals field or accumulator) or WRITE a record --
+    these are performed by the generated main loop and must not be
+    reproduced in the returned method body.
+    """
+    owned_lines = []
+    for line in paragraph.source.splitlines():
+        target_match = _TO_TARGET_RE.search(line)
+        if target_match and target_match.group(1).upper() in _SCAFFOLD_OWNED_TARGETS:
+            owned_lines.append(line.strip())
+        elif _WRITE_RE.match(line):
+            owned_lines.append(line.strip())
+    return owned_lines
 
 
 def _accessor(name: str) -> str:
@@ -81,6 +113,36 @@ Semantic rules -- these are absolute, not stylistic preferences:
    comparing the parent field to a literal string yourself.
 """
 
+WORKED_EXAMPLE = """\
+Worked example (a different, fictitious paragraph -- shown only to
+illustrate the required style; do not reuse its logic or field names):
+
+COBOL:
+    COMPUTE-PENALTY.
+        IF AC-OVERDUE
+            COMPUTE WS-PENALTY = AC-BALANCE * 0.02
+        ELSE
+            MOVE ZERO TO WS-PENALTY
+        END-IF.
+
+Correct Java body for that example, respecting every rule above:
+    if (ac.isOverdue()) {
+        ws.penalty = ac.balance.multiply(new java.math.BigDecimal("0.02"))
+            .setScale(2, java.math.RoundingMode.DOWN);
+    } else {
+        ws.penalty = java.math.BigDecimal.ZERO.setScale(2);
+    }
+
+Correct JSON response for that example:
+{"method_body": "if (ac.isOverdue()) {\\n    ws.penalty = ac.balance.multiply(new java.math.BigDecimal(\\"0.02\\")).setScale(2, java.math.RoundingMode.DOWN);\\n} else {\\n    ws.penalty = java.math.BigDecimal.ZERO.setScale(2);\\n}", "assumptions": []}
+
+Notice: every BigDecimal/RoundingMode reference is fully qualified as
+java.math.BigDecimal / java.math.RoundingMode (the scaffold declares no
+imports, so an unqualified type name will not compile), every setScale
+call names DOWN explicitly, and the condition is read through its boolean
+accessor, never a string comparison.
+"""
+
 PROHIBITIONS = """\
 Prohibitions -- the returned body must not:
 - declare or reference any field not listed in the field table below
@@ -122,10 +184,26 @@ def build_synthesis_prompt(paragraph: Paragraph, context: DataContext, java_sign
     ]
     condition_table = "\n".join(condition_lines) or "(none)"
 
+    owned_lines = _scaffold_owned_lines(paragraph)
+    if owned_lines:
+        owned_list = "\n".join(f"    {line}" for line in owned_lines)
+        scaffold_owned_section = f"""\
+Statements you must NOT translate -- the paragraph source below includes
+the following statements verbatim, but they populate the output record
+and/or the running total, which the generated main loop already does
+outside this method (see the prohibition above against writing to
+ws.totalInterest). Omit every one of these from your returned body:
+{owned_list}
+
+"""
+    else:
+        scaffold_owned_section = ""
+
     return f"""\
 {ROLE}
 
 {SEMANTIC_RULES}
+{WORKED_EXAMPLE}
 Field table for this paragraph's context:
 {field_table}
 
@@ -137,7 +215,7 @@ your answer -- return only the statements that go inside it):
 {java_signature}
 
 {PROHIBITIONS}
-COBOL paragraph source, verbatim ({paragraph.identifier}, lines {paragraph.start_line}-{paragraph.end_line}):
+{scaffold_owned_section}COBOL paragraph source, verbatim ({paragraph.identifier}, lines {paragraph.start_line}-{paragraph.end_line}):
 ```
 {paragraph.source}
 ```

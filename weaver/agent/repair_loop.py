@@ -26,7 +26,7 @@ from weaver.agent.prompt import SYNTHESIS_SCHEMA
 from weaver.agent.repair_deterministic import try_deterministic_repair
 from weaver.agent.repair_model import RepairAttempt, build_repair_prompt
 from weaver.agent.segment import Paragraph
-from weaver.agent.validate import ValidationError, parse_response, static_reject
+from weaver.agent.validate import auto_qualify, ValidationError, parse_response, regeneration_hint, static_reject
 from weaver.classification import Classification
 
 MAX_ATTEMPTS = 3
@@ -103,10 +103,18 @@ def repair_unit(
             response = client.generate(InferenceRequest(prompt=prompt, schema=SYNTHESIS_SCHEMA))
             try:
                 parsed = parse_response(response.text)
+                # Change 1: same mechanical qualification fix as M2.
+                parsed.method_body, _qualified = auto_qualify(parsed.method_body)
                 static_reject(parsed, ALLOWED_IDENTIFIERS)
                 new_body = parsed.method_body
             except ValidationError as e:
-                attempts.append(RepairAttempt(attempt_number, best_body, f"model response invalid: {e}"))
+                # Change 3: a precise hint, not just the raw error -- this
+                # is what the next attempt's prompt history (N3 item 7)
+                # actually shows the model.
+                attempts.append(RepairAttempt(
+                    attempt_number, best_body,
+                    f"model response invalid: {e}. Hint given on retry: {regeneration_hint(e)}",
+                ))
                 continue
             source = "model"
 

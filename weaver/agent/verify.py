@@ -26,12 +26,15 @@ INPUT_DATA = Path("fixtures/data/accounts.dat")
 OUTPUT_FILENAME = "interest.out"
 
 
-def verify_candidate(main_class: str, classpath: Path) -> tuple[Report, list[Classification]]:
-    golden_lines = GOLDEN_OUTPUT.read_text().splitlines()
-    input_lines = INPUT_DATA.read_text().splitlines()
+def verify_candidate(main_class: str, classpath: Path, golden_output: Path = GOLDEN_OUTPUT,
+                      input_data: Path = INPUT_DATA, output_filename: str = OUTPUT_FILENAME,
+                      report_layout: tuple = REPORT_LAYOUT, totals_layout: tuple = TOTALS_LAYOUT,
+                      ) -> tuple[Report, list[Classification]]:
+    golden_lines = golden_output.read_text().splitlines()
+    input_lines = input_data.read_text().splitlines()
 
     with tempfile.TemporaryDirectory() as tmp:
-        result = run_candidate(main_class, classpath, Path(tmp), INPUT_DATA, OUTPUT_FILENAME)
+        result = run_candidate(main_class, classpath, Path(tmp), input_data, output_filename)
 
     candidate_lines = result.output_lines or []
     total_records = max(len(golden_lines), len(candidate_lines))
@@ -42,7 +45,7 @@ def verify_candidate(main_class: str, classpath: Path) -> tuple[Report, list[Cla
         o_line = normalize_line_endings(golden_lines[i]) if i < len(golden_lines) else ""
         c_line = normalize_line_endings(candidate_lines[i]) if i < len(candidate_lines) else ""
         causing_input = input_lines[i] if i < len(input_lines) else None
-        layout = REPORT_LAYOUT if i < len(input_lines) else TOTALS_LAYOUT
+        layout = report_layout if i < len(input_lines) else totals_layout
 
         div = compare_lines(i, o_line, c_line, causing_input, layout=layout)
         if div is not None:

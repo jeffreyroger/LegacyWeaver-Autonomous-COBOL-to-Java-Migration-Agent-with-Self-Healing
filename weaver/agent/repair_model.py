@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from weaver.agent.prompt import _scaffold_owned_lines
 from weaver.agent.segment import Paragraph
 from weaver.classification import Classification, DefectClass
 from weaver.comparison import Divergence
@@ -90,6 +91,19 @@ def build_repair_prompt(
                 history_lines.append(f"Diagnostics: {a.diagnostics}")
     history = "\n".join(history_lines)
 
+    owned_lines = _scaffold_owned_lines(paragraph)
+    if owned_lines:
+        owned_list = "\n".join(f"    {line}" for line in owned_lines)
+        scaffold_owned_section = f"""\
+Statements you must NOT translate -- these populate the output record
+and/or the running total, which the generated main loop already does
+outside this method:
+{owned_list}
+
+"""
+    else:
+        scaffold_owned_section = ""
+
     return f"""\
 You are repairing a Java method body that failed verification against a
 COBOL oracle. This is a repair, not a fresh translation -- take the
@@ -103,7 +117,7 @@ Originating COBOL paragraph ({paragraph.identifier}):
 {paragraph.source}
 ```
 
-{history}
+{scaffold_owned_section}{history}
 
 The method body must fit this signature (return only the statements that
 go inside it):

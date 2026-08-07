@@ -11,7 +11,9 @@ instruction) -- continues to the next unit and reports partial progress.
 from __future__ import annotations
 
 import json
+import threading
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -47,6 +49,8 @@ class Orchestrator:
     trace_path: Path = TRACE_PATH
     state_path: Path = STATE_PATH
     results: dict[str, UnitResult] = field(default_factory=dict)
+    on_event: Callable[[dict], None] | None = None
+    cancel_requested: threading.Event | None = None
 
     def __post_init__(self) -> None:
         self.trace_path.parent.mkdir(parents=True, exist_ok=True)
@@ -62,8 +66,13 @@ class Orchestrator:
             "duration_seconds": round(duration, 3), "model_calls": model_calls,
             "tokens": tokens, "memory_hit": memory_hit, "outcome": outcome,
         }
+        # Disk write is authoritative and happens unconditionally; the
+        # callback is a tee for an observer (e.g. the backend's SSE stream)
+        # and must never block or alter what lands on disk.
         with self.trace_path.open("a") as f:
             f.write(json.dumps(event) + "\n")
+        if self.on_event is not None:
+            self.on_event(event)
 
     def _plan(self) -> list[Paragraph]:
         # perceive
@@ -157,9 +166,15 @@ class Orchestrator:
     def run(self) -> dict[str, UnitResult]:
         units = self._plan()
         for unit in units:
+            # Checked at a unit boundary only -- never kill mid-unit, which
+            # would leave containers running and state inconsistent.
+            if self.cancel_requested is not None and self.cancel_requested.is_set():
+                self._emit("*", "cancel", "stop_before_unit", 0.0, outcome=f"stopped before {unit.identifier}")
+                break
             # Never halt the whole run on one unit's escalation.
             result = self._process_unit(unit)
             self.results[unit.identifier] = result
+            # Checkpoint after commit/escalate (both terminal), never before.
             self._persist_state()
         return self.results
 

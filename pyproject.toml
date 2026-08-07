@@ -8,6 +8,12 @@ dependencies = [
     "requests",
 ]
 
+[project.optional-dependencies]
+backend = [
+    "fastapi",
+    "uvicorn",
+]
+
 [project.scripts]
 weaver = "weaver.cli:main"
 

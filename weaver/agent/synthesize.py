@@ -16,7 +16,9 @@ from weaver.agent.data_context import build_context
 from weaver.agent.inference import InferenceClient, InferenceRequest
 from weaver.agent.prompt import SYNTHESIS_SCHEMA, build_synthesis_prompt
 from weaver.agent.segment import Paragraph, segment
-from weaver.agent.validate import SynthesizedBody, ValidationError, parse_response, static_reject
+from weaver.agent.validate import (
+    SynthesizedBody, ValidationError, auto_qualify, parse_response, regeneration_hint, static_reject,
+)
 
 MAX_REGENERATE_ATTEMPTS = 3  # M2: regenerate up to twice, then escalate as synthesis failure
 JAVA_SIGNATURE = "static void processRecord(AccountRecord ar, WorkingStorage ws)"
@@ -49,11 +51,17 @@ def synthesize_paragraph(paragraph: Paragraph, client: InferenceClient) -> Synth
         # N3's repair loop, not from M2's regenerate step re-asking the
         # same question. M2 regenerates by nudging the prompt with the
         # prior failure so the retry isn't a guaranteed repeat.
-        this_prompt = prompt if attempt == 1 else f"{prompt}\n\nYour previous answer was rejected: {last_error}. Follow the output contract exactly."
+        this_prompt = prompt if attempt == 1 else (
+            f"{prompt}\n\nYour previous answer was rejected: {last_error}. {regeneration_hint(last_error)}"
+        )
         response = client.generate(InferenceRequest(prompt=this_prompt, schema=SYNTHESIS_SCHEMA))
         raw_responses.append(response.text)
         try:
             body = parse_response(response.text)
+            # Change 1: mechanical fix, not a model concern -- rewrite bare
+            # BigDecimal/RoundingMode to java.math.* before static_reject
+            # ever sees the body.
+            body.method_body, _qualified = auto_qualify(body.method_body)
             static_reject(body, ALLOWED_IDENTIFIERS)
             return SynthesisResult(paragraph.identifier, body, attempt, prompt, raw_responses)
         except ValidationError as e:

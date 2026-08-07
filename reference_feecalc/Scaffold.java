@@ -1,11 +1,11 @@
 /*
  * Scaffold.java — GENERATED, do not hand-edit (Step K2).
  *
- * Produced deterministically by weaver/agent/scaffold.py from
- * weaver.layout's field tables. Everything here is control flow, decoding,
+ * Produced deterministically by weaver/agent/scaffold.py from a
+ * ScaffoldSpec's field tables. Everything here is control flow, decoding,
  * and encoding implied by the declared byte offsets and edit masks — no
  * paragraph business logic. The one paragraph body that requires
- * interpretation (PROCESS-RECORD) is a stub between substitution markers;
+ * interpretation is a stub between substitution markers;
  * weaver/agent/assemble.py replaces it with a synthesized or hand-written
  * body without touching anything else in this file.
  */
@@ -50,53 +50,45 @@ final class CobolEdit {
 final class AccountRecord {
     final String id;
     final java.math.BigDecimal balance;
-    final java.math.BigDecimal rate;
-    final String type;
-    final String flags;
+    final String tier;
+    final String active;
 
-    AccountRecord(String id, java.math.BigDecimal balance, java.math.BigDecimal rate, String type, String flags) {
+    AccountRecord(String id, java.math.BigDecimal balance, String tier, String active) {
         this.id = id;
         this.balance = balance;
-        this.rate = rate;
-        this.type = type;
-        this.flags = flags;
+        this.tier = tier;
+        this.active = active;
     }
 
     static AccountRecord decode(String line) {
         return new AccountRecord(
                 line.substring(0, 16),
                 Scaffold.decodeSignedTrailing(line.substring(16, 27), line.charAt(27), 2),
-                Scaffold.decodeUnsigned(line.substring(28, 34), 5),
-                line.substring(34, 35),
-                line.substring(35, 39)
+                line.substring(28, 29),
+                line.substring(29, 30)
         );
     }
 
-    String dormant() { return flags.substring(0, 1); }
-    String hold() { return flags.substring(1, 2); }
 
-    boolean isPremium() { return type.equals("P"); }
-    boolean isDormant() { return dormant().equals("Y"); }
-    boolean isHold() { return hold().equals("Y"); }
+
+
 }
 
 final class ReportLine {
     final String id;
-    final String type;
+    final String tier;
     final java.math.BigDecimal balance;
-    final java.math.BigDecimal interest;
-    final String dormant;
+    final java.math.BigDecimal fee;
 
-    ReportLine(String id, String type, java.math.BigDecimal balance, java.math.BigDecimal interest, String dormant) {
+    ReportLine(String id, String tier, java.math.BigDecimal balance, java.math.BigDecimal fee) {
         this.id = id;
-        this.type = type;
+        this.tier = tier;
         this.balance = balance;
-        this.interest = interest;
-        this.dormant = dormant;
+        this.fee = fee;
     }
 
     String encode() {
-        return Scaffold.pad(id, 16) + Scaffold.pad(type, 1) + CobolEdit.floatingSign(balance, 13, 2) + CobolEdit.floatingSign(interest, 11, 2) + Scaffold.pad(dormant, 1);
+        return Scaffold.pad(id, 16) + Scaffold.pad(tier, 1) + CobolEdit.floatingSign(balance, 13, 2) + CobolEdit.floatingSign(fee, 11, 2);
     }
 }
 
@@ -117,15 +109,15 @@ final class TotalsLine {
 }
 
 final class WorkingStorage {
-    java.math.BigDecimal appliedRate = java.math.BigDecimal.ZERO.setScale(5);
-    java.math.BigDecimal interest = java.math.BigDecimal.ZERO.setScale(2);
-    java.math.BigDecimal totalInterest = java.math.BigDecimal.ZERO.setScale(2);
+    java.math.BigDecimal rate = java.math.BigDecimal.ZERO.setScale(5);
+    java.math.BigDecimal fee = java.math.BigDecimal.ZERO.setScale(2);
+    java.math.BigDecimal totalFee = java.math.BigDecimal.ZERO.setScale(2);
 }
 
 public class Scaffold {
-    private static final String INPUT_FILE = "accounts.dat";
-    private static final String OUTPUT_FILE = "interest.out";
-    private static final int RECORD_WIDTH = 39;
+    private static final String INPUT_FILE = "fees.dat";
+    private static final String OUTPUT_FILE = "fee.out";
+    private static final int RECORD_WIDTH = 30;
 
     static java.math.BigDecimal decodeUnsigned(String digits, int scale) {
         java.math.BigDecimal unscaled = new java.math.BigDecimal(new java.math.BigInteger(digits));
@@ -163,34 +155,33 @@ public class Scaffold {
             }
             String line = String.format("%-" + RECORD_WIDTH + "s", rawLine);
             AccountRecord ar = AccountRecord.decode(line);
-            processRecord(ar, ws);
-            ws.totalInterest = ws.totalInterest.add(ws.interest);
+            computeFee(ar, ws);
+            ws.totalFee = ws.totalFee.add(ws.fee);
 
-            ReportLine rl = new ReportLine(ar.id, ar.type, ar.balance, ws.interest, ar.dormant());
+            ReportLine rl = new ReportLine(ar.id, ar.tier, ar.balance, ws.fee);
             // GnuCOBOL LINE SEQUENTIAL strips trailing spaces on WRITE.
             out.append(rstripSpaces(rl.encode())).append("\n");
         }
 
-        TotalsLine tl = new TotalsLine(Scaffold.pad("TOTAL INTEREST:", 30), ws.totalInterest, " ");
+        TotalsLine tl = new TotalsLine(Scaffold.pad("TOTAL FEE:", 30), ws.totalFee, " ");
         out.append(rstripSpaces(tl.encode())).append("\n");
 
         java.nio.file.Files.write(java.nio.file.Paths.get(OUTPUT_FILE),
             out.toString().getBytes(java.nio.charset.StandardCharsets.US_ASCII));
     }
 
-    static void processRecord(AccountRecord ar, WorkingStorage ws) {
-        // PARAGRAPH:PROCESS-RECORD:BEGIN
-if (ar.isPremium()) {
-    ws.appliedRate = ar.rate.multiply(new BigDecimal("1.15"));
+    static void computeFee(AccountRecord ar, WorkingStorage ws) {
+        // PARAGRAPH:COMPUTE-FEE:BEGIN
+if (ar.tier.equals("A")) {
+    ws.rate = new java.math.BigDecimal("0.01500");
+} else if (ar.tier.equals("B")) {
+    ws.rate = new java.math.BigDecimal("0.01000");
 } else {
-    ws.appliedRate = ar.rate;
+    ws.rate = new java.math.BigDecimal("0.00500");
 }
 
-if (ar.isDormant()) {
-    ws.interest = BigDecimal.ZERO;
-} else {
-    ws.interest = ar.balance.multiply(ws.appliedRate).divide(new BigDecimal("365"), RoundingMode.DOWN);
-}
-        // PARAGRAPH:PROCESS-RECORD:END
+ws.fee = ar.balance.multiply(ws.rate).setScale(2, java.math.RoundingMode.DOWN);
+
+        // PARAGRAPH:COMPUTE-FEE:END
     }
 }
