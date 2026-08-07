@@ -1,0 +1,3 @@
+Frontend bundle not yet built (out of scope for the backend phase).
+Do not add a CDN-hosted font or script reference here when the bundle
+lands -- see BACKEND_PLAN.md Step B8 and §5.1.

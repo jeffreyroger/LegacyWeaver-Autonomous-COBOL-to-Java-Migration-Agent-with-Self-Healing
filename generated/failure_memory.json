@@ -783,7 +783,7 @@
     "patch_description": "Remove the spurious .negate() call -- the sign is already correct.",
     "patch_body_template": ".negate() -> (removed)",
     "verification_status": "verified",
-    "hit_count": 1,
+    "hit_count": 2,
     "confidence": 1.0,
     "provenance": "Discovered and fixed by weaver.agent.repair_loop.repair_unit on a deliberately injected defect during Step O3 (real repair loop run, real verify_unit compile + 200-record differential comparison, 0 divergences after patch). See generated/o3_case_b_body.java."
   },

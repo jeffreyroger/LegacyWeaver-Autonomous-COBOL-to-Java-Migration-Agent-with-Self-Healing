@@ -1,0 +1,16 @@
+{
+  "step": "S2 - cross-program zero-inference memory demonstration",
+  "date": "2026-08-07",
+  "source_program": "interest.cob (memory seeded here, Step O3)",
+  "target_program": "feecalc.cob (different field names, different arithmetic: single MULTIPLY vs interest's MULTIPLY/DIVIDE chain, no REDEFINES/88-level)",
+  "defect_injected": "spurious ar.balance.negate() before use in computeFee -- same defect class as the interest-sign-negate-2026-08-07 seeded memory case",
+  "result": {
+    "divergences_before_patch": 31,
+    "memory_hit_case_id": "interest-sign-negate-2026-08-07",
+    "cosine_similarity": 1.0,
+    "divergences_after_memory_sourced_patch": 0,
+    "model_calls": 0,
+    "wall_clock_seconds": 10.48
+  },
+  "honesty_note": "The plan's O2 acceptance test describes 'resolution time under a second' for a zero-inference memory hit -- that refers to avoiding a model call, not avoiding recompilation. This run's 10.48s is javac compile + full 30-record differential re-verification overhead (real, not padded); the repair step itself (weaver.agent.repair_deterministic.patch_sign, applied from the memory-identified defect class) is instant. Flagging this distinction rather than rounding the number down to imply sub-second end-to-end."
+}

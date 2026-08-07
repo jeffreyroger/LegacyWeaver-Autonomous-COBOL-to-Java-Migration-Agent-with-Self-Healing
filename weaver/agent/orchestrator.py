@@ -17,14 +17,18 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+import uuid
+
 from weaver.agent.attribution import verify_unit
 from weaver.agent.escalation import DiagnosticRecord, build_diagnostic_record
 from weaver.agent.inference import InferenceClient
-from weaver.agent.memory import FailureMemory
+from weaver.agent.memory import FailureMemory, MemoryCase, embed
 from weaver.agent.memory_repair import try_memory_repair
 from weaver.agent.repair_loop import repair_unit
 from weaver.agent.segment import Paragraph, segment
+from weaver.agent.signature import build_signature
 from weaver.agent.synthesize import synthesize_paragraph
+from weaver.report import Report
 
 STATE_PATH = Path("generated/orchestrator_state.json")
 TRACE_PATH = Path("generated/trace.ndjson")
@@ -39,6 +43,7 @@ class UnitResult:
     memory_hit: bool
     duration_seconds: float
     diagnostic: DiagnosticRecord | None = None
+    last_report: Report | None = None  # backend divergence endpoint (BACKEND_PLAN.md §4.1) reads this verbatim
 
 
 @dataclass
@@ -51,10 +56,14 @@ class Orchestrator:
     results: dict[str, UnitResult] = field(default_factory=dict)
     on_event: Callable[[dict], None] | None = None
     cancel_requested: threading.Event | None = None
+    fresh_trace: bool = True
 
     def __post_init__(self) -> None:
         self.trace_path.parent.mkdir(parents=True, exist_ok=True)
-        self.trace_path.write_text("")  # fresh trace per run
+        if self.fresh_trace:
+            self.trace_path.write_text("")  # fresh trace per run
+        else:
+            self.trace_path.touch(exist_ok=True)  # resume: append, never truncate
         self.client = InferenceClient(cache_dir=Path("generated/model_cache"))
         self.memory = FailureMemory(self.memory_store_path)
 
@@ -122,11 +131,13 @@ class Orchestrator:
             if result.report.divergence_count == 0:
                 duration = time.monotonic() - unit_start
                 self._emit(unit.identifier, "commit", "accept", duration, outcome="verified clean")
-                return UnitResult(unit.identifier, "committed", body, model_calls, False, duration)
+                return UnitResult(unit.identifier, "committed", body, model_calls, False, duration,
+                                   last_report=result.report)
 
             # classify (already computed inside verify_unit) + memory lookup
             classification = result.classifications[0]
             failing_div = result.report.divergences[0]
+            field_scale = 2
             t0 = time.monotonic()
             mem_result, case_id = try_memory_repair(
                 self.memory, unit.identifier, body, classification, 2,
@@ -139,7 +150,8 @@ class Orchestrator:
                 duration = time.monotonic() - unit_start
                 self._emit(unit.identifier, "commit", "accept", duration,
                             memory_hit=True, outcome=f"resolved from memory case {case_id}")
-                return UnitResult(unit.identifier, "committed", body, model_calls, True, duration)
+                return UnitResult(unit.identifier, "committed", body, model_calls, True, duration,
+                                   last_report=result.report)
 
         # repair (N2/N3/N4)
         t0 = time.monotonic()
@@ -153,7 +165,11 @@ class Orchestrator:
         duration = time.monotonic() - unit_start
         if outcome.resolved:
             self._emit(unit.identifier, "commit", "accept", duration, outcome="resolved via repair loop")
-            return UnitResult(unit.identifier, "committed", outcome.final_body, model_calls, False, duration)
+            if result.compiled:
+                self._write_back_case(unit.identifier, classification, field_scale, failing_div.field_name,
+                                       outcome)
+            return UnitResult(unit.identifier, "committed", outcome.final_body, model_calls, False, duration,
+                               last_report=outcome.final_report)
 
         record = build_diagnostic_record(
             unit, outcome.escalation_reason or "unresolved", classification if result.compiled else None,
@@ -161,7 +177,35 @@ class Orchestrator:
             outcome.attempts, synth.body.assumptions,
         )
         self._emit(unit.identifier, "escalate", "give_up", duration, outcome=outcome.escalation_reason)
-        return UnitResult(unit.identifier, "escalated", outcome.final_body, model_calls, False, duration, record)
+        return UnitResult(unit.identifier, "escalated", outcome.final_body, model_calls, False, duration, record,
+                           last_report=outcome.final_report)
+
+    def _write_back_case(self, unit_id: str, classification, field_scale: int,
+                          offending_statement: str, outcome) -> None:
+        """O2.5 -- write back a repair verified by the loop itself (not a
+        memory hit; those are already stored). The signature is built the
+        same way O1/O2's query side builds it, so a future run's query()
+        can find this case."""
+        last_attempt = outcome.attempts[-1] if outcome.attempts else None
+        source = "deterministic" if last_attempt and "deterministic" in last_attempt.outcome else "model"
+        sig = build_signature(classification, field_scale, offending_statement)
+        case = MemoryCase(
+            case_id=f"{unit_id}-{classification.defect_class.value}-{uuid.uuid4().hex[:8]}",
+            signature=sig,
+            embedding=embed(sig.as_text()),
+            defect_class=classification.defect_class.value,
+            normalized_construct=sig.normalized_operation,
+            root_cause=f"Resolved by the {source} repair path after {len(outcome.attempts)} attempt(s).",
+            patch_description=last_attempt.outcome if last_attempt else "resolved via repair loop",
+            patch_body_template=outcome.final_body,
+            verification_status="verified",
+            hit_count=0,
+            confidence=1.0,
+            provenance=f"Written back by Orchestrator._process_unit for unit {unit_id} "
+                       f"(real repair loop run, verify_unit compile + differential comparison, "
+                       f"0 divergences after patch).",
+        )
+        self.memory.write_back(case)
 
     def run(self) -> dict[str, UnitResult]:
         units = self._plan()

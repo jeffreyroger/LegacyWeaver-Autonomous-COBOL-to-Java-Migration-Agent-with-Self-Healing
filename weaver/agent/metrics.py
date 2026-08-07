@@ -29,9 +29,10 @@ class Metrics:
     inference_seconds: float
 
 
-def compute_metrics() -> Metrics:
-    trace_lines = [json.loads(l) for l in TRACE_PATH.read_text().splitlines() if l.strip()]
-    state = json.loads(STATE_PATH.read_text())
+def compute_metrics(trace_path: Path = TRACE_PATH, state_path: Path = STATE_PATH,
+                     m4_baseline_path: Path = M4_BASELINE_PATH) -> Metrics:
+    trace_lines = [json.loads(l) for l in trace_path.read_text().splitlines() if l.strip()]
+    state = json.loads(state_path.read_text())
 
     total_units = len(state)
     committed = sum(1 for r in state.values() if r["status"] == "committed")
@@ -50,8 +51,8 @@ def compute_metrics() -> Metrics:
     )
 
     equivalence_rate_unassisted = None
-    if M4_BASELINE_PATH.exists():
-        m4 = json.loads(M4_BASELINE_PATH.read_text())
+    if m4_baseline_path.exists():
+        m4 = json.loads(m4_baseline_path.read_text())
         if m4["units_synthesized"]:
             equivalence_rate_unassisted = 100 * m4["units_compiling"] / m4["units_synthesized"]
 

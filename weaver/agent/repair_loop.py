@@ -28,6 +28,7 @@ from weaver.agent.repair_model import RepairAttempt, build_repair_prompt
 from weaver.agent.segment import Paragraph
 from weaver.agent.validate import auto_qualify, ValidationError, parse_response, regeneration_hint, static_reject
 from weaver.classification import Classification
+from weaver.report import Report
 
 MAX_ATTEMPTS = 3
 WALL_CLOCK_CAP_SECONDS = 120
@@ -48,6 +49,7 @@ class RepairOutcome:
     escalated: bool = False
     escalation_reason: str | None = None
     trace: list[dict] = field(default_factory=list)
+    final_report: Report | None = None  # backend divergence endpoint reads this verbatim
 
 
 def _trace_event(events: list[dict], **kwargs) -> None:
@@ -70,9 +72,13 @@ def repair_unit(
     best_result = initial_result
     best_count = initial_result.report.divergence_count if initial_result.compiled else None
 
+    def _report_of(r: AttributionResult) -> Report | None:
+        return r.report if r.compiled else None
+
     for attempt_number in range(1, MAX_ATTEMPTS + 1):
         if time.monotonic() - start_time > WALL_CLOCK_CAP_SECONDS:
-            return RepairOutcome(unit_id, False, best_body, attempts, True, "wall-clock cap exceeded")
+            return RepairOutcome(unit_id, False, best_body, attempts, True, "wall-clock cap exceeded",
+                                  final_report=_report_of(best_result))
 
         # --- decide what kind of repair this attempt needs ---
         if not best_result.compiled:
@@ -82,7 +88,7 @@ def repair_unit(
             patch_body = None
         else:
             if best_result.report.divergence_count == 0:
-                return RepairOutcome(unit_id, True, best_body, attempts)
+                return RepairOutcome(unit_id, True, best_body, attempts, final_report=_report_of(best_result))
             classification: Classification = best_result.classifications[0]
             failing_div = best_result.report.divergences[0]
             defect_class = classification.defect_class
@@ -124,6 +130,7 @@ def repair_unit(
             return RepairOutcome(
                 unit_id, False, best_body, attempts, True,
                 "repeated patch hash -- model has stopped generating new ideas",
+                final_report=_report_of(best_result),
             )
         seen_hashes.add(new_hash)
 
@@ -140,7 +147,7 @@ def repair_unit(
         new_count = result.report.divergence_count
         if new_count == 0:
             attempts.append(RepairAttempt(attempt_number, new_body, f"resolved ({source})"))
-            return RepairOutcome(unit_id, True, new_body, attempts)
+            return RepairOutcome(unit_id, True, new_body, attempts, final_report=_report_of(result))
 
         # --- N4.4: regression guard ---
         if best_count is not None and new_count > best_count:
@@ -160,4 +167,5 @@ def repair_unit(
     return RepairOutcome(
         unit_id, False, best_body, attempts, True,
         f"attempt budget ({MAX_ATTEMPTS}) exhausted",
+        final_report=_report_of(best_result),
     )

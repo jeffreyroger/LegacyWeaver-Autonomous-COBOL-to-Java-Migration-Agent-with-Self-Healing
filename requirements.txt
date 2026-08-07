@@ -1,0 +1,10 @@
+rich
+requests
+
+# backend extra (docs/specs/BACKEND_PLAN.md)
+fastapi
+uvicorn
+pydantic
+
+# dev / tests
+pytest

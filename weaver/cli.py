@@ -10,6 +10,8 @@ report, and exits 0 if verified else 1.
 from __future__ import annotations
 
 import argparse
+import dataclasses
+import json
 import subprocess
 import sys
 import tempfile
@@ -18,6 +20,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.table import Table
 
+from weaver.agent.metrics import compute_metrics
 from weaver.classification import classify, summarize
 from weaver.comparison import compare_lines, normalize_line_endings
 from weaver.execution import run_candidate, run_oracle
@@ -39,7 +42,25 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument("input_data", type=Path)
     verify.add_argument("--report", type=Path, default=Path("report.json"))
 
+    report_cmd = sub.add_parser("report", help="Print metrics computed from a run directory's trace/state")
+    report_cmd.add_argument("run_dir", type=Path)
+
     return parser
+
+
+def run_report(args: argparse.Namespace) -> int:
+    """`weaver report <run_dir>` (BACKEND_PLAN.md §4.4 DC-5 target).
+
+    Reads the same trace.ndjson / orchestrator_state.json a run directory
+    holds and prints the identical Metrics object the backend's
+    GET /runs/{id} serves -- both call weaver.agent.metrics.compute_metrics.
+    """
+    trace_path = args.run_dir / "trace.ndjson"
+    state_path = args.run_dir / "orchestrator_state.json"
+    m4_path = args.run_dir / "m4_baseline.json"
+    metrics = compute_metrics(trace_path, state_path, m4_path)
+    print(json.dumps(dataclasses.asdict(metrics), indent=2))
+    return 0
 
 
 def _compile_oracle(cobol_source: Path) -> Path:
@@ -152,6 +173,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "verify":
         return run_verify(args)
+    if args.command == "report":
+        return run_report(args)
     parser.print_help()
     return 2
 

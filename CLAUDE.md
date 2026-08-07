@@ -7,6 +7,7 @@ These rules are binding for every session working in this repository.
 - [docs/specs/MVP_SRS.md](docs/specs/MVP_SRS.md) — what must be true (requirements, acceptance criteria) for the MVP (Phase 1).
 - [docs/specs/MVP_IMPLEMENTATION_PLAN.md](docs/specs/MVP_IMPLEMENTATION_PLAN.md) — how and in what order to build the MVP (phases A–I, owners, acceptance tests).
 - [docs/specs/AGENT_LAYER_PLAN.md](docs/specs/AGENT_LAYER_PLAN.md) — how and in what order to build the agent layer (Phase 2: phases J–T — local inference, deterministic scaffold, synthesis, repair loop, failure memory, orchestrator, escalation, measurement, memory demo, demo prep).
+- [docs/specs/BACKEND_PLAN.md](docs/specs/BACKEND_PLAN.md) — how to build the local run service (transport/lifecycle layer between agent and frontend) in `backend/`. Its own stated precondition is "MVP complete · agent layer complete." The backend contains no domain logic: it must never compare output, classify defects, or decide verification — any value the API returns must be independently reproducible via `weaver verify` on the command line, or the backend is doing something it should not (SRS DC-4, DC-5).
 
 **Before making any implementation decision, re-check the relevant document(s).**
 Do not improvise scope, architecture, numbers, or sequencing that isn't in

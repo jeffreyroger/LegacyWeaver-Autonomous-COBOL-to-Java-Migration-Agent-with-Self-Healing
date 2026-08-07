@@ -2,8 +2,13 @@
 
 **The compiled legacy binary is the specification; we verify translations against it automatically.**
 
-> Status: Phases A-F of [docs/specs/MVP_IMPLEMENTATION_PLAN.md](docs/specs/MVP_IMPLEMENTATION_PLAN.md)
-> are implemented and independently verified. See "Not yet implemented" below.
+> Status: MVP Phase 1 (A–I, [docs/specs/MVP_IMPLEMENTATION_PLAN.md](docs/specs/MVP_IMPLEMENTATION_PLAN.md))
+> is complete and independently verified. Agent layer Phase 2 (J–T,
+> [docs/specs/AGENT_LAYER_PLAN.md](docs/specs/AGENT_LAYER_PLAN.md)) — local
+> inference, deterministic scaffold, synthesis, repair loop, failure memory,
+> orchestrator, escalation — is implemented in `weaver/agent/`. The local run
+> service in `backend/` ([docs/specs/BACKEND_PLAN.md](docs/specs/BACKEND_PLAN.md))
+> is in progress; its precondition is "MVP complete · agent layer complete."
 
 ## Results
 
@@ -43,6 +48,7 @@ below assume a Linux or WSL2 Ubuntu shell.
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
+pip install -r requirements.txt   # or: pip install -e ".[backend]" for API-only
 
 python fixtures/generate_data.py fixtures/data/accounts.dat
 weaver verify fixtures/cobol/interest.cob baseline/Baseline.java fixtures/data/accounts.dat --report report.json
@@ -52,6 +58,16 @@ weaver verify fixtures/cobol/interest.cob baseline/Baseline.java fixtures/data/a
 (`javac`) automatically if their binaries are missing or stale, then runs
 the full compare/classify/report pipeline. Expect divergence count **132**
 and exit status **1** (not verified — the baseline is deliberately wrong).
+
+### Running the tests
+
+```bash
+python -m pytest tests/ -v
+```
+
+Tests that need the real GnuCOBOL/JDK toolchain (e.g.
+`test_full_pipeline_against_real_fixture`) are skipped automatically if
+`cobc`/`javac` aren't on `PATH` — the rest of the suite runs offline.
 
 ## Architecture
 
@@ -70,7 +86,22 @@ and exit status **1** (not verified — the baseline is deliberately wrong).
                            └──────────────────────────┘
                                        │
                                        ▼
-                    Perceive / Plan / Repair / Memory   <- full system, not MVP
+                           ┌──────────────────────────┐
+                           │   weaver/agent/           │   <- Phase 2 (agent layer)
+                           │  local inference (Ollama) │
+                           │  deterministic scaffold   │
+                           │  synthesis + repair loop  │
+                           │  failure memory           │
+                           │  orchestrator + escalation│
+                           └──────────────────────────┘
+                                       │
+                                       ▼
+                           ┌──────────────────────────┐
+                           │   backend/                │   <- Phase 3 (in progress)
+                           │  loopback-only HTTP API   │
+                           │  run lifecycle + SSE trace │
+                           │  no domain logic (DC-4/5) │
+                           └──────────────────────────┘
 ```
 
 ## Repository layout
@@ -80,12 +111,19 @@ and exit status **1** (not verified — the baseline is deliberately wrong).
 | `fixtures/` | COBOL oracle source, copybooks, generated input, golden output |
 | `baseline/` | Deliberately unconstrained Java translation (control arm) |
 | `weaver/` | The verification harness (execution, comparison, classification, CLI) |
-| `tests/` | Unit tests for the harness |
-| `docs/specs/` | MVP SRS and implementation runbook |
+| `weaver/agent/` | Agent layer: local inference, deterministic scaffold, synthesis, repair loop, failure memory, orchestrator, escalation |
+| `backend/` | Local, loopback-only HTTP service exposing agent run lifecycle and trace events to a browser (no domain logic — see [docs/specs/BACKEND_PLAN.md](docs/specs/BACKEND_PLAN.md)) |
+| `tests/` | Unit tests for the harness, agent layer, and backend |
+| `docs/specs/` | SRS and implementation plans for all three phases |
 | `docs/screenshots/` | Demonstration screenshots |
+| `generated/` | Run artifacts: model cache, failure memory, synthesized candidates |
+| `requirements.txt` | Pinned-free dependency list (mirrors `pyproject.toml`); use for quick `pip install -r` setup |
 
 
 ## Specifications
 
-- [docs/specs/MVP_SRS.md](docs/specs/MVP_SRS.md)
-- [docs/specs/MVP_IMPLEMENTATION_PLAN.md](docs/specs/MVP_IMPLEMENTATION_PLAN.md)
+- [docs/specs/MVP_SRS.md](docs/specs/MVP_SRS.md) — MVP requirements and acceptance criteria
+- [docs/specs/MVP_IMPLEMENTATION_PLAN.md](docs/specs/MVP_IMPLEMENTATION_PLAN.md) — MVP build order (phases A–I)
+- [docs/specs/AGENT_LAYER_PLAN.md](docs/specs/AGENT_LAYER_PLAN.md) — agent layer build order (phases J–T)
+- [docs/specs/BACKEND_PLAN.md](docs/specs/BACKEND_PLAN.md) — local run service build order
+- [CLAUDE.md](CLAUDE.md) — binding working rules, hard constraints, and this repo's load-bearing numbers
