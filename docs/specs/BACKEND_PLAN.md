@@ -44,7 +44,7 @@ Before building, validate what exists. Each requirement is assessed as **PASS** 
 | FR-8.1 | Every state transition appended as a structured trace event | **GAP** | Trace is written to disk but not exposed. §4.3 |
 | FR-8.2 | Metrics computed and reported on completion | **RISK** | Must be computed by the agent, **not** the API. §4.4 |
 | FR-8.4 | All model interactions cached; replay serves only from cache | **PASS** | Backend must expose replay as a run parameter, not reimplement it |
-| §3.9.1 | CLI command surface | **PASS** | Backend must not diverge from it. §3.4 |
+| §3.9.1 | CLI command surface | **PARTIAL** | `migrate`, `verify`, `report` implemented; `baseline`, `replay`, `memory` absent. Backend must not diverge from it. §3.4 |
 | §3.9.2 | Inference endpoint validated as loopback; abort otherwise | **RISK** | Validation must run on service startup too, not only CLI. §5.2 |
 | §3.9.3 | Containers with no network, read-only, memory and wall-clock bounds | **PASS** | Backend must not relax these when invoking runs |
 | §3.9.4 | Terminal UI mandatory, web UI desirable | **PASS** | Backend is additive; CLI must keep working standalone |

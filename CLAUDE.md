@@ -133,6 +133,16 @@ harness, not as a replacement for it.
     (e.g. sandboxing, if never scoped into a phase) stays explicitly marked
     as not implemented rather than implied.
 
+13. **Run parameters live in `RunSpec` and must actually take effect.**
+    `weaver/agent/runspec.py` is the single definition of what parameters
+    constitute a run, one field per SRS §3.9.1 `migrate` flag. Before
+    2026-08-07, `Orchestrator.scaffold_path` was accepted and never read,
+    the backend's required `data_file` was written into `params.json`
+    without influencing the run (DC-5/NFR-D1), and `max_repairs`/`seed`/
+    `replay` had no caller hook at all. Never add a run parameter that is
+    accepted but not threaded to the code that consumes it;
+    `tests/test_param_plumbing.py` guards this.
+
 ## Before starting any step
 
 1. Read the corresponding runbook step (owner, prerequisites, procedure,

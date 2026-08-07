@@ -75,15 +75,43 @@ wrong — see `baseline/Baseline.java`'s header for the planted defects).
 With [Ollama](https://ollama.com) running locally:
 
 ```bash
-python -m weaver.agent.orchestrator
+weaver migrate fixtures/cobol/interest.cob --data fixtures/data/accounts.dat
 ```
 
 The orchestrator synthesizes a candidate, verifies it against the oracle,
 and — if it doesn't verify — enters a repair loop, consulting failure
 memory before each attempt so it doesn't retry a fix that's already known
-not to work. There is no dedicated `weaver agent` CLI subcommand yet — the
-orchestrator is driven programmatically (see `weaver/agent/orchestrator.py`'s
-`__main__` block) or via the local run service in `backend/`.
+not to work. Unit status streams with colour coding as the run proceeds,
+and Ctrl-C stops cleanly at the next unit boundary.
+
+```
+--copybook DIR      copybook directory
+--data FILE         input data file used for verification
+--out DIR           output directory for generated Java
+--max-repairs 3     repair attempts per unit
+--model TAG         local inference model (default qwen2.5-coder:7b)
+--seed 42           inference seed
+--replay            serve model responses exclusively from cache
+```
+
+Each run writes `runs/<run_id>/` containing `params.json`, `trace.jsonl`,
+and `orchestrator_state.json`. Read its metrics back with:
+
+```bash
+weaver report runs/<run_id>
+```
+
+That is the same object the local run service serves from `GET /runs/{id}` —
+byte-identical by test, so no number depends on which surface you read it from.
+
+Exit codes: `0` all units committed, `1` at least one unit escalated,
+`130` cancelled.
+
+**Not yet implemented:** `weaver baseline` (FR-8.3), `weaver replay <run_id>`
+(FR-8.4 — the `--replay` flag on `migrate` works; the standalone command does
+not), and `weaver memory list|export|import` (§3.9.1). Generated code is
+compiled and executed on the host, not in the containers §3.9.3/NFR-S1
+require.
 
 ### Running the tests
 
