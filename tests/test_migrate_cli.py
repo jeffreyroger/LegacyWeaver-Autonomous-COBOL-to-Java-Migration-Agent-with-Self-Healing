@@ -139,3 +139,27 @@ def test_migrate_exit_code_1_when_a_unit_escalates(tmp_path, monkeypatch):
         ["migrate", "prog.cbl", "--run-dir", str(tmp_path / "run3"), "--json"]
     )
     assert cli_mod.run_migrate(args) == 1
+
+
+def test_stream_event_emits_colour_coded_status(capsys):
+    """SS3.9.4 [MUST]: stream unit status with colour coding."""
+    from weaver.cli import _stream_event
+
+    _stream_event({
+        "timestamp": 1.0, "unit": "PROCESS-RECORD", "node": "repair",
+        "action": "patch", "duration_seconds": 0.4, "model_calls": 1,
+        "tokens": 120, "memory_hit": False, "outcome": "committed",
+    })
+    out = capsys.readouterr().out
+    assert "PROCESS-RECORD" in out
+    assert "repair" in out
+
+
+def test_stream_event_never_raises_on_a_partial_event(capsys):
+    """The callback is a tee for an observer and must never break a run --
+    a malformed or partial event must not propagate an exception into the
+    orchestrator's state machine."""
+    from weaver.cli import _stream_event
+
+    _stream_event({"unit": "P1"})  # every other key missing
+    assert capsys.readouterr().out  # produced something, raised nothing

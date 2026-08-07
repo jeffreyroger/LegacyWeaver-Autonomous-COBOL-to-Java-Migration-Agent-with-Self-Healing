@@ -78,7 +78,7 @@ def build_parser() -> argparse.ArgumentParser:
 def run_report(args: argparse.Namespace) -> int:
     """`weaver report <run_dir>` (BACKEND_PLAN.md §4.4 DC-5 target).
 
-    Reads the same trace.ndjson / orchestrator_state.json a run directory
+    Reads the same trace.jsonl / orchestrator_state.json a run directory
     holds and prints the identical Metrics object the backend's
     GET /runs/{id} serves -- both call weaver.agent.metrics.compute_metrics.
     """
@@ -216,12 +216,64 @@ def build_migrate_spec(args: argparse.Namespace) -> RunSpec:
     )
 
 
+# SS3.9.4 [MUST]: colour coding for streamed unit status.
+_OUTCOME_COLOURS = {
+    "committed": "green",
+    "escalated": "red",
+    "cancel": "yellow",
+}
+
+
 def _stream_event(event: dict) -> None:
-    pass
+    """Render one TraceEvent as a coloured status line (SS3.9.4).
+
+    This is a tee for an observer: it must never raise, because an exception
+    here would propagate into the orchestrator's state machine and abort a
+    run over a display concern.
+    """
+    unit = event.get("unit", "?")
+    node = event.get("node", "?")
+    action = event.get("action", "")
+    outcome = event.get("outcome", "")
+    duration = event.get("duration_seconds", 0.0)
+
+    colour = _OUTCOME_COLOURS.get(outcome, "cyan")
+    for key, value in _OUTCOME_COLOURS.items():
+        if key in str(outcome):
+            colour = value
+            break
+
+    try:
+        console.print(
+            f"[dim]{duration:>6.2f}s[/dim] "
+            f"[bold]{unit}[/bold] "
+            f"[{colour}]{node}[/{colour}]"
+            f"{' · ' + action if action else ''}"
+            f"{' · ' + str(outcome) if outcome else ''}"
+        )
+    except Exception:  # noqa: BLE001 - display must never break a run
+        pass
 
 
 def _render_migrate_summary(run_dir: Path, results: dict) -> None:
-    pass
+    table = Table(title="Migration summary")
+    table.add_column("Unit")
+    table.add_column("Status")
+    table.add_column("Model calls")
+    table.add_column("Memory hit")
+    table.add_column("Duration")
+    for unit_id, r in results.items():
+        colour = _OUTCOME_COLOURS.get(r.status, "cyan")
+        table.add_row(
+            unit_id,
+            f"[{colour}]{r.status}[/{colour}]",
+            str(r.model_calls),
+            str(r.memory_hit),
+            f"{r.duration_seconds:.1f}s",
+        )
+    console.print(table)
+    console.print(f"[cyan]Run directory:[/cyan] {run_dir}")
+    console.print(f"[cyan]Metrics:[/cyan] weaver report {run_dir}")
 
 
 def run_migrate(args: argparse.Namespace) -> int:
