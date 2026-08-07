@@ -1,0 +1,26 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+
+# COBOL build output
+fixtures/cobol/build/
+*.o
+*.so
+
+# Java build output
+baseline/*.class
+
+# Generated data (not golden)
+fixtures/data/*.dat
+!fixtures/data/.gitkeep
+
+# Harness run artefacts
+runs/
+*.report.json
+
+# OS
+.DS_Store
+Thumbs.db
