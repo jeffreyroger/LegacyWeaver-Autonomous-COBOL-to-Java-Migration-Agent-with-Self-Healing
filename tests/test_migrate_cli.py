@@ -195,3 +195,22 @@ def test_stream_event_never_raises_on_a_partial_event(capsys):
 
     _stream_event({"unit": "P1"})  # every other key missing
     assert capsys.readouterr().out  # produced something, raised nothing
+
+
+def test_verify_accepts_the_srs_flag_form():
+    """SS3.9.1: weaver verify --cobol <src> --java <src> --data <file>."""
+    args = build_parser().parse_args(
+        ["verify", "--cobol", "a.cob", "--java", "B.java", "--data", "c.dat"]
+    )
+    assert args.cobol_source == Path("a.cob")
+    assert args.java_candidate == Path("B.java")
+    assert args.input_data == Path("c.dat")
+
+
+def test_verify_still_accepts_the_positional_form():
+    """The positional form is used by README, test_acceptance.py and
+    BACKEND_PLAN.md:388 -- it must keep working."""
+    args = build_parser().parse_args(["verify", "a.cob", "B.java", "c.dat"])
+    assert args.cobol_source == Path("a.cob")
+    assert args.java_candidate == Path("B.java")
+    assert args.input_data == Path("c.dat")

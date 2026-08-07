@@ -45,10 +45,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="weaver", description="LegacyWeaver differential verification harness")
     sub = parser.add_subparsers(dest="command", required=True)
 
+    # SRS 3.9.1 specifies the flag form; the positional form predates it and
+    # is used by README, tests/test_acceptance.py and BACKEND_PLAN.md:388,
+    # so both are accepted.
     verify = sub.add_parser("verify", help="Verify a Java candidate against a COBOL oracle")
-    verify.add_argument("cobol_source", type=Path)
-    verify.add_argument("java_candidate", type=Path)
-    verify.add_argument("input_data", type=Path)
+    verify.add_argument("cobol_source_pos", type=Path, nargs="?", default=None,
+                        metavar="cobol_source")
+    verify.add_argument("java_candidate_pos", type=Path, nargs="?", default=None,
+                        metavar="java_candidate")
+    verify.add_argument("input_data_pos", type=Path, nargs="?", default=None,
+                        metavar="input_data")
+    verify.add_argument("--cobol", dest="cobol_flag", type=Path, default=None)
+    verify.add_argument("--java", dest="java_flag", type=Path, default=None)
+    verify.add_argument("--data", dest="data_flag", type=Path, default=None)
     verify.add_argument("--report", type=Path, default=Path("report.json"))
 
     report_cmd = sub.add_parser("report", help="Print metrics computed from a run directory's trace/state")
@@ -72,7 +81,37 @@ def build_parser() -> argparse.ArgumentParser:
     migrate.add_argument("--json", action="store_true",
                          help="Emit machine-readable JSON instead of streaming status")
 
+    original_parse_args = parser.parse_args
+
+    def parse_args(args=None, namespace=None):
+        ns = original_parse_args(args, namespace)
+        if ns.command == "verify":
+            _normalise_verify_args(ns, parser)
+        return ns
+
+    parser.parse_args = parse_args
+
     return parser
+
+
+def _normalise_verify_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    """Collapse SS3.9.1's flag form and the older positional form into one
+    set of attributes run_verify can rely on."""
+    args.cobol_source = args.cobol_flag or args.cobol_source_pos
+    args.java_candidate = args.java_flag or args.java_candidate_pos
+    args.input_data = args.data_flag or args.input_data_pos
+    missing = [
+        name for name, value in (
+            ("cobol source", args.cobol_source),
+            ("java candidate", args.java_candidate),
+            ("input data", args.input_data),
+        ) if value is None
+    ]
+    if missing:
+        parser.error(
+            "verify requires " + ", ".join(missing)
+            + " (positionally, or via --cobol/--java/--data)"
+        )
 
 
 def run_report(args: argparse.Namespace) -> int:
@@ -334,6 +373,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.command == "verify":
+        _normalise_verify_args(args, parser)
         return run_verify(args)
     if args.command == "report":
         return run_report(args)
