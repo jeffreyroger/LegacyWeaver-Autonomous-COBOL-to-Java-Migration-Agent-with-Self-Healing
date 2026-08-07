@@ -1,0 +1,52 @@
+{
+  "verified": {
+    "index": 0,
+    "oracle_line": "ACCT000000000001S      1142.00       0.10N",
+    "candidate_line": "ACCT000000000001S      1142.00       0.10N",
+    "input_line": "ACCT00000000000100000114200+003251SNN  "
+  },
+  "TRUNCATION": {
+    "index": 1,
+    "oracle_line": "ACCT000000000002S      1317.00       0.12N",
+    "candidate_line": "ACCT000000000002S      1317.00       0.13N",
+    "input_line": "ACCT00000000000200000131700+003502SNN  ",
+    "offset": 30,
+    "field": "RL-INTEREST",
+    "delta": "-0.01",
+    "oracle_val": "       0.12",
+    "candidate_val": "       0.13"
+  },
+  "SIGN": {
+    "index": 90,
+    "oracle_line": "ACCT000000000091S    -86452.37      -8.20N",
+    "candidate_line": "ACCT000000000091S     86452.37       8.21N",
+    "input_line": "ACCT00000000009100008645237-003466SNN  ",
+    "offset": 17,
+    "field": "RL-BALANCE",
+    "delta": "-172904.74",
+    "oracle_val": "    -86452.37",
+    "candidate_val": "     86452.37"
+  },
+  "CONTROL_FLOW": {
+    "index": 115,
+    "oracle_line": "ACCT000000000116S    240493.00       0.00Y",
+    "candidate_line": "ACCT000000000116S    240493.00      67.96Y",
+    "input_line": "ACCT00000000011600024049300+010315SYN  ",
+    "offset": 30,
+    "field": "RL-INTEREST",
+    "delta": "-67.96",
+    "oracle_val": "       0.00",
+    "candidate_val": "      67.96"
+  },
+  "UNKNOWN": {
+    "index": 148,
+    "oracle_line": "ACCT000000000149P    912680.00     520.97N",
+    "candidate_line": "ACCT000000000149P    912680.00     521.00N",
+    "input_line": "ACCT00000000014900091268000+018118PNN  ",
+    "offset": 30,
+    "field": "RL-INTEREST",
+    "delta": "-0.03",
+    "oracle_val": "     520.97",
+    "candidate_val": "     521.00"
+  }
+}

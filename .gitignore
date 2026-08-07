@@ -1,5 +1,6 @@
 # Python
 .venv/
+.venv-wsl/
 __pycache__/
 *.pyc
 *.egg-info/
@@ -12,6 +13,7 @@ fixtures/cobol/build/
 
 # Java build output
 baseline/*.class
+baseline/build/
 
 # Generated data (not golden)
 fixtures/data/*.dat

@@ -58,11 +58,11 @@ def _run_in_isolated_dir(command: list[str], work_dir: Path, input_path: Path,
 
 def run_oracle(binary_path: Path, work_dir: Path, input_path: Path,
                output_filename: str) -> ExecutionResult:
-    return _run_in_isolated_dir([str(binary_path)], work_dir, input_path, output_filename)
+    return _run_in_isolated_dir([str(binary_path.resolve())], work_dir, input_path, output_filename)
 
 
 def run_candidate(main_class: str, classpath: Path, work_dir: Path, input_path: Path,
                    output_filename: str) -> ExecutionResult:
     return _run_in_isolated_dir(
-        ["java", "-cp", str(classpath), main_class], work_dir, input_path, output_filename
+        ["java", "-cp", str(classpath.resolve()), main_class], work_dir, input_path, output_filename
     )
