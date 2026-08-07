@@ -15,12 +15,15 @@ import json
 import subprocess
 import sys
 import tempfile
+import threading
+import uuid
 from pathlib import Path
 
 from rich.console import Console
 from rich.table import Table
 
 from weaver.agent.metrics import compute_metrics
+from weaver.agent.orchestrator import RUNS_ROOT, Orchestrator
 from weaver.agent.runspec import (
     DEFAULT_MAX_REPAIRS,
     DEFAULT_MODEL,
@@ -79,7 +82,7 @@ def run_report(args: argparse.Namespace) -> int:
     holds and prints the identical Metrics object the backend's
     GET /runs/{id} serves -- both call weaver.agent.metrics.compute_metrics.
     """
-    trace_path = args.run_dir / "trace.ndjson"
+    trace_path = args.run_dir / "trace.jsonl"
     state_path = args.run_dir / "orchestrator_state.json"
     m4_path = args.run_dir / "m4_baseline.json"
     metrics = compute_metrics(trace_path, state_path, m4_path)
@@ -213,6 +216,64 @@ def build_migrate_spec(args: argparse.Namespace) -> RunSpec:
     )
 
 
+def _stream_event(event: dict) -> None:
+    pass
+
+
+def _render_migrate_summary(run_dir: Path, results: dict) -> None:
+    pass
+
+
+def run_migrate(args: argparse.Namespace) -> int:
+    """`weaver migrate` (SRS 3.9.1) -- drive the orchestrator from the terminal.
+
+    Constructs the same Orchestrator backend/runs.py constructs and writes the
+    same files into the run directory, so `weaver report <run_dir>` and the
+    service's GET /runs/{id} read identical inputs (DC-5).
+    """
+    spec = build_migrate_spec(args)
+    run_id = uuid.uuid4().hex
+    run_dir = args.run_dir or (RUNS_ROOT / run_id)
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    # NFR-D1 reproducibility record, written before the first unit executes.
+    # Every value here actually influences the run -- see weaver/agent/runspec.py.
+    (run_dir / "params.json").write_text(json.dumps(spec.to_dict(), indent=2))
+
+    cancel_requested = threading.Event()
+    orchestrator = Orchestrator(
+        spec=spec,
+        trace_path=run_dir / "trace.jsonl",
+        state_path=run_dir / "orchestrator_state.json",
+        on_event=None if args.json else _stream_event,
+        cancel_requested=cancel_requested,
+    )
+
+    try:
+        results = orchestrator.run()
+    except KeyboardInterrupt:
+        # Cooperative: ask the orchestrator to stop at the next unit boundary
+        # rather than dying mid-unit (orchestrator.py: "never kill mid-unit,
+        # which would leave containers running and state inconsistent").
+        cancel_requested.set()
+        console.print("[yellow]Cancellation requested; stopping at unit boundary.[/yellow]")
+        return 130
+
+    statuses = {r.status for r in results.values()}
+    exit_code = 0 if statuses <= {"committed"} else 1
+
+    if args.json:
+        print(json.dumps({
+            "run_dir": str(run_dir),
+            "units": {uid: dataclasses.asdict(r) for uid, r in results.items()},
+            "exit_code": exit_code,
+        }, indent=2, default=str))
+    else:
+        _render_migrate_summary(run_dir, results)
+
+    return exit_code
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -220,6 +281,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_verify(args)
     if args.command == "report":
         return run_report(args)
+    if args.command == "migrate":
+        return run_migrate(args)
     parser.print_help()
     return 2
 

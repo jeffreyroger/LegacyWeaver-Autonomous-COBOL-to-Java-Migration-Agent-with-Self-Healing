@@ -49,7 +49,7 @@ class RunRecord:
 
     @property
     def trace_path(self) -> Path:
-        return self.run_dir / "trace.ndjson"
+        return self.run_dir / "trace.jsonl"
 
     @property
     def state_path(self) -> Path:

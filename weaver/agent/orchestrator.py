@@ -32,7 +32,7 @@ from weaver.agent.synthesize import synthesize_paragraph
 from weaver.report import Report
 
 STATE_PATH = Path("generated/orchestrator_state.json")
-TRACE_PATH = Path("generated/trace.ndjson")
+TRACE_PATH = Path("generated/trace.jsonl")  # FR-8.1
 RUNS_ROOT = Path("runs")  # FR-8.1: runs/<run_id>/trace.jsonl
 
 
