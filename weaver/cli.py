@@ -21,6 +21,12 @@ from rich.console import Console
 from rich.table import Table
 
 from weaver.agent.metrics import compute_metrics
+from weaver.agent.runspec import (
+    DEFAULT_MAX_REPAIRS,
+    DEFAULT_MODEL,
+    DEFAULT_SEED,
+    RunSpec,
+)
 from weaver.classification import classify, summarize
 from weaver.comparison import compare_lines, normalize_line_endings
 from weaver.execution import run_candidate, run_oracle
@@ -44,6 +50,24 @@ def build_parser() -> argparse.ArgumentParser:
 
     report_cmd = sub.add_parser("report", help="Print metrics computed from a run directory's trace/state")
     report_cmd.add_argument("run_dir", type=Path)
+
+    # SRS 3.9.1: weaver migrate <program.cbl> [--copybook DIR] [--data FILE]
+    #            [--out DIR] [--max-repairs 3] [--model qwen2.5-coder:7b] [--seed 42]
+    migrate = sub.add_parser("migrate", help="Autonomously migrate a COBOL program to Java")
+    migrate.add_argument("program", type=Path, help="COBOL program to migrate")
+    migrate.add_argument("--copybook", type=Path, default=None, help="Copybook directory")
+    migrate.add_argument("--data", type=Path, default=None, help="Input data file for verification")
+    migrate.add_argument("--out", type=Path, default=None, help="Output directory for generated Java")
+    migrate.add_argument("--max-repairs", type=int, default=DEFAULT_MAX_REPAIRS,
+                         help="Maximum repair attempts per unit")
+    migrate.add_argument("--model", default=DEFAULT_MODEL, help="Local inference model tag")
+    migrate.add_argument("--seed", type=int, default=DEFAULT_SEED, help="Inference seed")
+    migrate.add_argument("--replay", action="store_true",
+                         help="FR-8.4: serve model responses exclusively from cache")
+    migrate.add_argument("--run-dir", type=Path, default=None,
+                         help="Run directory (default: runs/<run_id>)")
+    migrate.add_argument("--json", action="store_true",
+                         help="Emit machine-readable JSON instead of streaming status")
 
     return parser
 
@@ -166,6 +190,27 @@ def _render_summary(report: Report, class_summary: dict) -> None:
                 f"oracle={div.oracle_value!r} candidate={div.candidate_value!r} delta={div.numeric_delta} "
                 f"input={div.causing_input_record!r}"
             )
+
+
+def build_migrate_spec(args: argparse.Namespace) -> RunSpec:
+    """Translate parsed `migrate` arguments into the RunSpec the orchestrator
+    runs. Every flag must land in the spec -- a flag that parses but never
+    reaches the orchestrator is the exact defect Task 1 fixed.
+    """
+    defaults = RunSpec.default()
+    return RunSpec(
+        cobol_source=args.program,
+        copybook_dir=args.copybook,
+        input_data=args.data or defaults.input_data,
+        out_dir=args.out,
+        golden_output=defaults.golden_output,
+        scaffold_path=defaults.scaffold_path,
+        memory_store_path=defaults.memory_store_path,
+        max_repairs=args.max_repairs,
+        model=args.model,
+        seed=args.seed,
+        replay=args.replay,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
