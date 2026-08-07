@@ -142,17 +142,49 @@ def test_migrate_exit_code_1_when_a_unit_escalates(tmp_path, monkeypatch):
 
 
 def test_stream_event_emits_colour_coded_status(capsys):
-    """SS3.9.4 [MUST]: stream unit status with colour coding."""
+    """SS3.9.4 [MUST]: stream unit status with colour coding (SRS 3.9.4).
+
+    Uses realistic trace event values (node="commit", outcome="verified clean")
+    as emitted by the orchestrator, not synthetic past-tense status values.
+    """
     from weaver.cli import _stream_event
 
+    # Realistic trace event from orchestrator: commit node with verified outcome
     _stream_event({
-        "timestamp": 1.0, "unit": "PROCESS-RECORD", "node": "repair",
-        "action": "patch", "duration_seconds": 0.4, "model_calls": 1,
-        "tokens": 120, "memory_hit": False, "outcome": "committed",
+        "timestamp": 1.0, "unit": "PROCESS-RECORD", "node": "commit",
+        "action": "accept", "duration_seconds": 0.4, "model_calls": 1,
+        "tokens": 120, "memory_hit": False, "outcome": "verified clean",
     })
     out = capsys.readouterr().out
     assert "PROCESS-RECORD" in out
-    assert "repair" in out
+    assert "commit" in out
+    assert "verified clean" in out  # Outcome is rendered alongside the status
+
+
+def test_stream_event_colour_codes_escalate_and_cancel(capsys):
+    """SS3.9.4 [MUST]: verify colour coding for escalate (red) and cancel (yellow).
+
+    Tests that the orchestrator's real node values ("escalate", "cancel") map
+    to the correct colours, not just "commit".
+    """
+    from weaver.cli import _stream_event
+
+    # Escalate event (red)
+    _stream_event({
+        "timestamp": 1.0, "unit": "P1", "node": "escalate",
+        "action": "give_up", "duration_seconds": 0.5, "outcome": "synthesis_failure",
+    })
+    out1 = capsys.readouterr().out
+    assert "P1" in out1
+    assert "escalate" in out1
+
+    # Cancel event (yellow)
+    _stream_event({
+        "timestamp": 2.0, "unit": "*", "node": "cancel",
+        "action": "stop_before_unit", "duration_seconds": 0.0, "outcome": "stopped before P2",
+    })
+    out2 = capsys.readouterr().out
+    assert "cancel" in out2
 
 
 def test_stream_event_never_raises_on_a_partial_event(capsys):

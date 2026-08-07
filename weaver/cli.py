@@ -217,10 +217,15 @@ def build_migrate_spec(args: argparse.Namespace) -> RunSpec:
 
 
 # SS3.9.4 [MUST]: colour coding for streamed unit status.
+# Keys support both trace event nodes (present tense) and UnitResult status values (past tense).
 _OUTCOME_COLOURS = {
+    # Trace event nodes (orchestrator.py self._emit calls)
+    "commit": "green",
+    "escalate": "red",
+    "cancel": "yellow",
+    # UnitResult status values (_render_migrate_summary)
     "committed": "green",
     "escalated": "red",
-    "cancel": "yellow",
 }
 
 
@@ -230,6 +235,9 @@ def _stream_event(event: dict) -> None:
     This is a tee for an observer: it must never raise, because an exception
     here would propagate into the orchestrator's state machine and abort a
     run over a display concern.
+
+    Colour is derived from the trace event's node value (e.g. "commit", "escalate",
+    "cancel"), not from the freeform outcome string.
     """
     unit = event.get("unit", "?")
     node = event.get("node", "?")
@@ -237,11 +245,7 @@ def _stream_event(event: dict) -> None:
     outcome = event.get("outcome", "")
     duration = event.get("duration_seconds", 0.0)
 
-    colour = _OUTCOME_COLOURS.get(outcome, "cyan")
-    for key, value in _OUTCOME_COLOURS.items():
-        if key in str(outcome):
-            colour = value
-            break
+    colour = _OUTCOME_COLOURS.get(node, "cyan")
 
     try:
         console.print(
