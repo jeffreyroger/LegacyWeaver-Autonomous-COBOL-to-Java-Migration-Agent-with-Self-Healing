@@ -48,6 +48,57 @@ def test_verify_unit_reads_the_scaffold_it_was_given(tmp_path, monkeypatch):
     assert "SENTINEL SCAFFOLD" in seen["text"]
 
 
+def test_try_memory_repair_forwards_spec_to_verify_unit(tmp_path, monkeypatch):
+    """memory_repair.try_memory_repair is called unconditionally on the
+    automatic run path (orchestrator.py) before the repair_loop fallback is
+    ever reached -- if it doesn't forward the caller's spec, a non-default
+    scaffold_path/input_data/golden_output is silently ignored during a
+    memory-hit repair, reproducing the same defect class this task exists
+    to eliminate."""
+    from weaver.agent.memory_repair import try_memory_repair
+    from weaver.agent.memory import FailureMemory, MemoryCase, embed
+    from weaver.agent.signature import build_signature
+    from weaver.classification import Classification, DefectClass
+
+    sentinel = tmp_path / "Sentinel.java"
+    sentinel.write_text("// SENTINEL SCAFFOLD\n")
+    spec = RunSpec.default().replace(scaffold_path=sentinel)
+
+    classification = Classification(DefectClass.SIGN, 1.0, {"oracle": "0.10", "candidate": "-0.10"})
+    sig = build_signature(classification, 2, "MOVE WS-INTEREST TO RL-INTEREST")
+    case = MemoryCase(
+        case_id="TEST-SIGN-case",
+        signature=sig,
+        embedding=embed(sig.as_text()),
+        defect_class="SIGN",
+        normalized_construct=sig.normalized_operation,
+        root_cause="test", patch_description="test",
+        patch_body_template="ws.interest = ws.interest;",
+        verification_status="verified", hit_count=0, confidence=1.0,
+        provenance="test",
+    )
+    store_path = tmp_path / "memory.json"
+    memory = FailureMemory(store_path)
+    memory.write_back(case)
+
+    seen = {}
+
+    def fake_assemble(scaffold_text, bodies):
+        seen["text"] = scaffold_text
+        raise RuntimeError("stop after assemble")
+
+    monkeypatch.setattr("weaver.agent.attribution.assemble", fake_assemble)
+
+    with pytest.raises(RuntimeError, match="stop after assemble"):
+        try_memory_repair(
+            memory, "PROCESS-RECORD", "ws.interest = ws.interest.negate();",
+            classification, 2, "MOVE WS-INTEREST TO RL-INTEREST",
+            tmp_path / "work", spec=spec,
+        )
+
+    assert "SENTINEL SCAFFOLD" in seen["text"]
+
+
 def test_verify_candidate_uses_injected_input_data(tmp_path, monkeypatch):
     from weaver.agent import verify as verify_mod
 

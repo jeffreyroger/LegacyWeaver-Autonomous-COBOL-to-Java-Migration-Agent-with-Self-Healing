@@ -150,6 +150,7 @@ class Orchestrator:
             mem_result, case_id = try_memory_repair(
                 self.memory, unit.identifier, body, classification, 2,
                 failing_div.field_name, Path(f"generated/orchestrator/{unit.identifier}/memory"),
+                spec=self.spec,
             )
             self._emit(unit.identifier, "memory_lookup", "query", time.monotonic() - t0,
                         memory_hit=case_id is not None, outcome=case_id or "miss")

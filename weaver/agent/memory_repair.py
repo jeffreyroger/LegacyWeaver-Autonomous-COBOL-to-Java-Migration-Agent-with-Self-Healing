@@ -13,6 +13,7 @@ from pathlib import Path
 from weaver.agent.attribution import AttributionResult, verify_unit
 from weaver.agent.memory import FailureMemory
 from weaver.agent.repair_deterministic import patch_sign
+from weaver.agent.runspec import RunSpec
 from weaver.agent.signature import build_signature
 from weaver.classification import Classification
 
@@ -31,8 +32,11 @@ def try_memory_repair(
     field_scale: int,
     offending_statement: str,
     work_dir: Path,
+    *,
+    spec: RunSpec | None = None,
 ) -> tuple[AttributionResult | None, str | None]:
     """Returns (result, case_id) on a verified memory-hit repair, else (None, None)."""
+    spec = spec or RunSpec.default()
     signature = build_signature(classification, field_scale, offending_statement)
     hit = memory.query(signature)
     if hit is None:
@@ -48,7 +52,7 @@ def try_memory_repair(
         memory.record_hit(case.case_id, verified=False)
         return None, None
 
-    result = verify_unit(unit_id, patch.patched_body, work_dir)
+    result = verify_unit(unit_id, patch.patched_body, work_dir, spec=spec)
     verified = result.compiled and result.report.divergence_count == 0
     memory.record_hit(case.case_id, verified=verified)
     if verified:
