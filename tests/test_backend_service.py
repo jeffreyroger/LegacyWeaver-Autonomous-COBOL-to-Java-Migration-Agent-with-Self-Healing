@@ -245,3 +245,36 @@ def test_create_run_rejects_when_toolchain_unavailable(monkeypatch, client):
     resp = client.post("/runs", json=_create_payload())
     assert resp.status_code == 503
     assert resp.json()["error_class"] == "TOOLCHAIN_MISSING"
+
+
+def test_cli_report_and_api_metrics_are_byte_identical(tmp_path, capsys):
+    """DC-5 (BACKEND_PLAN.md SS4.4): every number the API serves must be
+    obtainable from the CLI. Both call compute_metrics on the same files; if
+    they ever diverge, correctness is being decided in two places."""
+    import dataclasses
+    import json
+
+    from weaver.agent.metrics import compute_metrics
+    from weaver.cli import build_parser, run_report
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "trace.jsonl").write_text(
+        json.dumps({
+            "timestamp": 1.0, "unit": "P1", "node": "perceive", "action": "segment",
+            "duration_seconds": 0.1, "model_calls": 0, "tokens": 0,
+            "memory_hit": False, "outcome": "1 paragraphs found",
+        }) + "\n"
+    )
+    (run_dir / "orchestrator_state.json").write_text("{}")
+
+    api_metrics = dataclasses.asdict(
+        compute_metrics(run_dir / "trace.jsonl", run_dir / "orchestrator_state.json",
+                        run_dir / "m4_baseline.json")
+    )
+
+    args = build_parser().parse_args(["report", str(run_dir)])
+    assert run_report(args) == 0
+    cli_metrics = json.loads(capsys.readouterr().out)
+
+    assert cli_metrics == api_metrics
