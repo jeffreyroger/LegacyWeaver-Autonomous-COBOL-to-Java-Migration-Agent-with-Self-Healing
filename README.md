@@ -1,10 +1,29 @@
 # LegacyWeaver
 
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)](pyproject.toml)
+[![GnuCOBOL 3.x](https://img.shields.io/badge/GnuCOBOL-3.x-informational)](docs/specs/MVP_SRS.md)
+[![Tests](https://img.shields.io/badge/tests-60%20passed%2C%201%20skipped-brightgreen)](tests/)
+[![Offline](https://img.shields.io/badge/inference-local%20only%2C%20no%20cloud-lightgrey)](CLAUDE.md)
+
 **Autonomous COBOL → Java migration, verified against the compiled legacy binary — not against a human's reading of it.**
 
 LegacyWeaver treats the running COBOL program as ground truth. It compiles and executes the original alongside a Java candidate on identical input, compares every output byte, classifies any divergence by root cause, and — where a local model is available — drives a repair loop that fixes the candidate and re-verifies, with failed attempts remembered so the same mistake isn't retried.
 
 No cloud dependency, no partial-credit scoring, no human reading two files side by side and guessing whether they match. A translation is either byte-identical to the oracle or it isn't, and the tool tells you exactly why not.
+
+## Contents
+
+- [What it does](#what-it-does)
+- [Results](#results)
+- [Quickstart](#quickstart)
+- [Architecture](#architecture)
+- [Status &amp; roadmap](#status--roadmap)
+- [Repository layout](#repository-layout)
+- [Design principles](#design-principles)
+- [Specifications](#specifications)
+- [Contributing](#contributing)
+- [License](#license)
 
 ## What it does
 
@@ -123,6 +142,9 @@ Tests that need the real GnuCOBOL/JDK toolchain (e.g.
 `test_full_pipeline_against_real_fixture`) are skipped automatically if
 `cobc`/`javac` aren't on `PATH` — the rest of the suite runs offline.
 
+For a fuller step-by-step run, including what each command prints and
+what's deliberately not implemented yet, see [walkthrough.md](walkthrough.md).
+
 ## Architecture
 
 ```
@@ -163,6 +185,23 @@ verified. The local run service is under active development — its
 contract is that every value it serves must be reproducible from the CLI,
 never computed independently.
 
+## Status &amp; roadmap
+
+| Phase | Component | Status |
+|---|---|---|
+| 1 | Verification core (`weaver verify`) — compile, execute, compare, classify | **Complete** — blocking gates AC-2/AC-3/AC-9/AC-12 passed |
+| 2 | Agent layer (`weaver migrate`) — scaffold, synthesis, repair loop, failure memory, orchestrator | **Complete** — see build order in [AGENT_LAYER_PLAN.md](docs/specs/AGENT_LAYER_PLAN.md) |
+| 3 | Local run service (`backend/`) — loopback HTTP API, SSE trace streaming | **In progress** — `weaver report` / `GET /runs/{id}` parity is tested and passing; web trace UI is a **[SHOULD]**, not required |
+
+Known gaps, tracked rather than hidden (CLAUDE.md rule 12 — scope stays disclosed):
+
+- `weaver baseline <program.cbl>` (FR-8.3) — not implemented
+- `weaver replay <run_id>` as a standalone command (FR-8.4) — not implemented; the `--replay` *flag* on `migrate` works today
+- `weaver memory list | export | import` (§3.9.1) — not implemented; `FailureMemory` exists internally with no CLI surface
+- Sandboxed execution of generated code (§3.9.3 / NFR-S1) — generated Java currently compiles and runs on the host, not inside a `--network=none --read-only` container
+
+See [walkthrough.md](walkthrough.md) for a full run-through of what's implemented today, end to end.
+
 ## Repository layout
 
 | Path | Contents |
@@ -193,3 +232,32 @@ never computed independently.
 - [docs/specs/AGENT_LAYER_PLAN.md](docs/specs/AGENT_LAYER_PLAN.md) — agent layer build order
 - [docs/specs/BACKEND_PLAN.md](docs/specs/BACKEND_PLAN.md) — local run service build order
 - [CLAUDE.md](CLAUDE.md) — binding working rules, hard constraints, and this repo's load-bearing numbers
+
+## Contributing
+
+This project follows the specs, not ad hoc judgment calls — before opening
+a PR, read [CLAUDE.md](CLAUDE.md) and the plan document for whatever
+phase your change touches
+([MVP_IMPLEMENTATION_PLAN.md](docs/specs/MVP_IMPLEMENTATION_PLAN.md),
+[AGENT_LAYER_PLAN.md](docs/specs/AGENT_LAYER_PLAN.md), or
+[BACKEND_PLAN.md](docs/specs/BACKEND_PLAN.md)). A few rules that apply to
+every change, not just some:
+
+- The comparison contract (byte-for-byte, no tolerance) and the
+  deterministic classification order are never relaxed, for any reason.
+- Every acceptance test named in the relevant plan must pass before a step
+  is considered done — they're the definition of done, not a checkpoint to
+  skip under time pressure.
+- Run `python -m pytest tests/ -v` before submitting; tests that need
+  GnuCOBOL/JDK skip automatically if those toolchains aren't on `PATH`.
+- Keep scope disclosed: don't let the README, `--help` text, or a docstring
+  imply a command or feature works before it has its own passing
+  acceptance test.
+
+Open an issue for anything that looks like a spec gap rather than silently
+working around it — most "judgment calls" turn out to already be answered
+in the SRS.
+
+## License
+
+[MIT](LICENSE) © 2026 jeffreyroger
