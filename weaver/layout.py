@@ -6,9 +6,10 @@ comparison.py or classification.py. Two distinct tables are declared:
     INPUT_LAYOUT  -- how to slice an input record (Step B1)
     REPORT_LAYOUT -- how to slice an oracle/candidate output line (Step D3)
 
-TODO(Dev A / Step B1): fill in INPUT_LAYOUT from the copybook, on paper first.
-TODO(Dev C / Step D3): fill in REPORT_LAYOUT from the detail-line declaration
-    in the COBOL source.
+Both filled in from fixtures/cobol/copybooks/ACCOUNT-REC.cpy and
+interest.cob's detail-line declaration respectively (Steps B1/D3, long
+since complete -- NFR-14 is proven by weaver/agent/*_layout.py's five
+other fixtures reusing comparison.py/classification.py unchanged).
 """
 
 from __future__ import annotations
@@ -32,6 +33,16 @@ class Field:
     signed: bool = False
     trailing_separate_sign: bool = False
     redefines: str | None = None
+    # Which Java encoder weaver/agent/scaffold.py's report/totals line
+    # generator uses for this field: "floating_sign" (COBOL's -(n)9.99
+    # style, via CobolEdit.floatingSign -- the only style originally
+    # supported) or "zero_padded" (plain unsigned fixed-width digits, no
+    # sign column, no decimal point -- COBOL's PIC 9(n) style, via
+    # CobolEdit.zeroPadded). Added 2026-08-12: tieraccum_layout.py had
+    # dropped a PIC 99 field rather than extend the encoder for it; this
+    # closes that gap so a future fixture doesn't have to. Irrelevant for
+    # INPUT_LAYOUT fields (decoding, not encoding, has no edit-mask concept).
+    edit_style: str = "floating_sign"
 
 
 # Populated per Step B1 -- see fixtures/cobol/copybooks/ACCOUNT-REC.cpy for

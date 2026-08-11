@@ -548,6 +548,78 @@ Run all three configurations against the same fixture and the same harness:
 
 ---
 
+## Phase U — Fixture Breadth (Aug 11, post-demo-prep; user-authorized 2026-08-11)
+
+Not part of the original demo critical path. Added on explicit user direction
+after S1/S2 to show the harness generalizes across genuinely different
+control-flow shapes, not just a second flat-fee lookup that happens to share
+FEECALC's truncation defect class. Extended to four programs (U1-U4) on
+further explicit user direction (2026-08-12) -- still a closed, disclosed
+set, not an open-ended library, per the user's own "not to overload it"
+constraint from U1/U2's authorization.
+
+### Step U1 — Build a nested-conditional program **[MUST]**
+
+**Procedure.** Write `TAXCALC` — a single synthesis paragraph whose logic is
+a nested IF/ELSE bracket ladder (progressive tax-style thresholds), as
+opposed to FEECALC's flat EVALUATE lookup or interest.cob's single-level
+88-level branch. Same record-oriented shape (one paragraph per input
+record, no in-paragraph loop) so it reuses the existing scaffold generator
+and orchestrator unchanged.
+
+**Acceptance test.** Compiles under GnuCOBOL 3.x, runs, produces a
+golden output; `weaver verify` against a deliberately-broken candidate
+correctly attributes and classifies the divergence.
+
+### Step U2 — Build an in-paragraph-loop program **[MUST]**
+
+**Procedure.** Write `TIERACCUM` — a single synthesis paragraph whose logic
+contains a `PERFORM VARYING` loop internal to the paragraph (accumulating a
+tiered value across sub-units within one record), as opposed to every prior
+program's loop living only in the scaffold's per-record main loop. Tests
+whether the synthesis prompt's per-paragraph framing (K1: "one paragraph's
+logic, not the whole program") still holds when that one paragraph's logic
+is itself iterative.
+
+**Acceptance test.** Same as U1: compiles, runs, produces a golden output,
+`weaver verify` correctly attributes a planted defect.
+
+### Step U3 — Build a pure-arithmetic program **[MUST]**
+
+**Procedure.** Write `COMPOUND` — a single synthesis paragraph with no
+`IF`, `EVALUATE`, or `PERFORM` at all: a straight-line chain of four
+sequential `COMPUTE` statements, each depending on the previous step's
+result. Different from every prior fixture by having *no branching or
+looping whatsoever* -- the divergence risk is purely in chained truncation
+across steps, not in which path is taken.
+
+**Acceptance test.** Same as U1/U2: compiles under GnuCOBOL 3.x, runs,
+produces a golden output; `weaver verify` against a deliberately-broken
+candidate correctly attributes and classifies the divergence.
+
+### Step U4 — Build a compound-condition lookup program **[MUST]**
+
+**Procedure.** Write `SHIPCOST` — a single synthesis paragraph using
+`EVALUATE TRUE` with compound `AND` conditions spanning two different
+input fields (weight and zone), as opposed to FEECALC's flat single-field
+`EVALUATE` or TAXCALC's nested single-field `IF/ELSE` ladder. Tests
+whether the synthesis prompt's field table still holds when a single
+`WHEN` clause's condition references more than one accessor at once.
+
+**Acceptance test.** Same as U1/U2/U3.
+
+**Explicitly out of scope for Phase U:** cross-program failure-memory
+transfer between these four and FEECALC/interest (that guarantee is S2's,
+proven once, not re-proven per fixture); autonomous `weaver migrate`
+success is not required for any of them (feecalc.cob itself already
+demonstrates that success is model-capability-dependent, not an
+infrastructure guarantee -- see 2026-08-11 CLAUDE.md session notes). These
+four programs exist to prove `weaver verify`/attribution generalize to new
+control-flow shapes without scaffold.py/prompt.py changes beyond what Step
+S1's ScaffoldSpec generalization already provides.
+
+---
+
 ## Phase T — Demo Preparation (Aug 11 night, 2 h)
 
 ### Step T1 — Freeze **[MUST]**

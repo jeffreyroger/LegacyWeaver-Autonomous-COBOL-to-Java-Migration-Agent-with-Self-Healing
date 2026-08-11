@@ -26,9 +26,11 @@ from weaver.agent.memory import FailureMemory, MemoryCase, embed
 from weaver.agent.memory_repair import try_memory_repair
 from weaver.agent.repair_loop import repair_unit
 from weaver.agent.runspec import RunSpec
+from weaver.agent.scaffold import field_scale as scaffold_field_scale
 from weaver.agent.segment import Paragraph, segment
 from weaver.agent.signature import build_signature
-from weaver.agent.synthesize import synthesize_paragraph
+from weaver.agent.synthesize import SynthesisResult, synthesize_paragraph
+from weaver.agent.validate import SynthesizedBody
 from weaver.report import Report
 
 STATE_PATH = Path("generated/orchestrator_state.json")
@@ -57,6 +59,13 @@ class Orchestrator:
     on_event: Callable[[dict], None] | None = None
     cancel_requested: threading.Event | None = None
     fresh_trace: bool = True
+    # Held around every `results` mutation, if supplied, so a caller reading
+    # `results` under its own lock (e.g. backend/runs.py's `record.lock`,
+    # which guards RunManager.list_units()/decide_escalation()'s reads of
+    # this same dict) never races the worker thread's writes -- found in
+    # the 2026-08-12 audit: the backend's lock only serialized its own
+    # accesses against each other, not against this thread.
+    results_lock: threading.Lock | None = None
 
     @property
     def cobol_source(self) -> Path:
@@ -107,12 +116,27 @@ class Orchestrator:
         unit_start = time.monotonic()
         model_calls = 0
 
-        # synthesise
+        # synthesise -- or, if the caller supplied a candidate body
+        # (BACKEND_PLAN.md SS4.2's candidate-supplied mode, added 2026-08-12),
+        # use that directly and skip the model call entirely.
         t0 = time.monotonic()
-        synth = synthesize_paragraph(unit, self.client, spec=self.spec)
-        model_calls += synth.validation_attempts
-        self._emit(unit.identifier, "synthesise", "generate", time.monotonic() - t0,
-                    model_calls=synth.validation_attempts, outcome="ok" if synth.body else "synthesis_failure")
+        if self.spec.candidate_body_path is not None:
+            supplied_body = self.spec.candidate_body_path.read_text(encoding="utf-8")
+            synth = SynthesisResult(
+                paragraph_id=unit.identifier,
+                body=SynthesizedBody(method_body=supplied_body,
+                                      assumptions=["supplied candidate body -- not synthesized"]),
+                validation_attempts=0,
+                prompt="",
+                raw_responses=[],
+            )
+            self._emit(unit.identifier, "synthesise", "supplied", time.monotonic() - t0,
+                        model_calls=0, outcome="ok (candidate supplied)")
+        else:
+            synth = synthesize_paragraph(unit, self.client, spec=self.spec)
+            model_calls += synth.validation_attempts
+            self._emit(unit.identifier, "synthesise", "generate", time.monotonic() - t0,
+                        model_calls=synth.validation_attempts, outcome="ok" if synth.body else "synthesis_failure")
 
         if synth.body is None:
             record = build_diagnostic_record(
@@ -145,10 +169,13 @@ class Orchestrator:
             # classify (already computed inside verify_unit) + memory lookup
             classification = result.classifications[0]
             failing_div = result.report.divergences[0]
-            field_scale = 2
+            # The field's own declared scale, not a value hardcoded for
+            # interest.cob's fields (both happen to be scale 2) -- see
+            # 2026-08-12 audit.
+            field_scale = scaffold_field_scale(self.spec.scaffold_spec, failing_div.field_name)
             t0 = time.monotonic()
             mem_result, case_id = try_memory_repair(
-                self.memory, unit.identifier, body, classification, 2,
+                self.memory, unit.identifier, body, classification, field_scale,
                 failing_div.field_name, Path(f"generated/orchestrator/{unit.identifier}/memory"),
                 spec=self.spec,
             )
@@ -218,6 +245,16 @@ class Orchestrator:
 
     def run(self) -> dict[str, UnitResult]:
         units = self._plan()
+        if self.spec.candidate_body_path is not None and len(units) > 1:
+            # A single candidate file can't disambiguate which of several
+            # synthesis units it's a body for -- fail loudly rather than
+            # guessing (e.g. silently applying it to the first unit only).
+            raise ValueError(
+                f"candidate_body_path ({self.spec.candidate_body_path}) supplies a single "
+                f"paragraph body, but {self.cobol_source} has {len(units)} synthesis units "
+                f"({[u.identifier for u in units]}) -- candidate-supplied mode only supports "
+                "single-unit programs"
+            )
         for unit in units:
             # Checked at a unit boundary only -- never kill mid-unit, which
             # would leave containers running and state inconsistent.
@@ -226,7 +263,11 @@ class Orchestrator:
                 break
             # Never halt the whole run on one unit's escalation.
             result = self._process_unit(unit)
-            self.results[unit.identifier] = result
+            if self.results_lock is not None:
+                with self.results_lock:
+                    self.results[unit.identifier] = result
+            else:
+                self.results[unit.identifier] = result
             # Checkpoint after commit/escalate (both terminal), never before.
             self._persist_state()
         return self.results

@@ -121,25 +121,54 @@ def test_full_pipeline_against_real_fixture(tmp_path):
     assert report["verified"] is False
 
     # AC-10: UNKNOWN classifications must not exceed 15% of the total.
-    classifications = [
-        classify(_reconstruct_divergence(d)) for d in report["divergences"]
-    ]
+    #
+    # report["divergences"] is capped at 50 entries by design (FR-17,
+    # weaver/report.py's DIVERGENCE_CAP) -- reclassifying only that sample
+    # would check AC-10 against 50 records, not the 132 the SRS actually
+    # means by "the measured divergence set". Found in the 2026-08-12
+    # audit: this test passed by coincidence (the first 50 divergences
+    # happen to have a representative UNKNOWN rate), not by construction.
+    # Recompute the full, uncapped classification set the same way
+    # weaver.cli.run_verify itself does for its terminal/JSON classification
+    # breakdown, instead of trusting the capped report.json sample.
+    classifications = _classify_all_divergences()
+    assert len(classifications) == report["divergence_count"], (
+        "independently recomputed classification count must match the "
+        "report's divergence_count, or AC-10 isn't checking the real population"
+    )
     summary = summarize(classifications)
     unknown_pct = summary.get(DefectClass.UNKNOWN.value, {}).get("percentage", 0.0)
     assert unknown_pct <= 15.0
 
 
-def _reconstruct_divergence(d: dict):
-    from decimal import Decimal
-    from weaver.comparison import Divergence
+def _classify_all_divergences() -> list:
+    """Independently recompute classifications for every divergence between
+    the real golden output and baseline/Baseline.java, mirroring
+    weaver.cli.run_verify's own in-memory (uncapped) computation exactly --
+    see AC-10's comment above for why report.json's capped list isn't enough.
+    """
+    from weaver.cli import _compile_candidate
+    from weaver.execution import run_candidate
+    from weaver.layout import REPORT_LAYOUT, TOTALS_LAYOUT
 
-    delta = Decimal(d["numeric_delta"]) if d["numeric_delta"] is not None else None
-    return Divergence(
-        record_index=d["record_index"],
-        byte_offset=d["byte_offset"],
-        field_name=d["field_name"],
-        oracle_value=d["oracle_value"],
-        candidate_value=d["candidate_value"],
-        numeric_delta=delta,
-        causing_input_record=d["causing_input_record"],
-    )
+    main_class, classpath = _compile_candidate(REPO_ROOT / "baseline" / "Baseline.java")
+
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        candidate_result = run_candidate(main_class, classpath, Path(tmp), ACCOUNTS, "interest.out")
+
+    oracle_lines = _golden_lines()
+    candidate_lines = candidate_result.output_lines or []
+    input_lines = ACCOUNTS.read_text().splitlines()
+    total_records = max(len(oracle_lines), len(candidate_lines))
+
+    classifications = []
+    for i in range(total_records):
+        o_line = normalize_line_endings(oracle_lines[i]) if i < len(oracle_lines) else ""
+        c_line = normalize_line_endings(candidate_lines[i]) if i < len(candidate_lines) else ""
+        causing_input = input_lines[i] if i < len(input_lines) else None
+        layout = REPORT_LAYOUT if i < len(input_lines) else TOTALS_LAYOUT
+        div = compare_lines(i, o_line, c_line, causing_input, layout=layout)
+        if div is not None:
+            classifications.append(classify(div))
+    return classifications

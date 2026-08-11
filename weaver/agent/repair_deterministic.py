@@ -79,18 +79,23 @@ def patch_padding(body: str) -> Patch:
 
 
 PATCHERS = {
-    DefectClass.SCALE: lambda body: patch_scale(body, target_scale=2),
-    DefectClass.SIGN: patch_sign,
-    DefectClass.PADDING: patch_padding,
+    DefectClass.SCALE: patch_scale,
+    DefectClass.SIGN: lambda body, target_scale: patch_sign(body),
+    DefectClass.PADDING: lambda body, target_scale: patch_padding(body),
 }
 
 
-def try_deterministic_repair(defect_class: DefectClass, body: str) -> Patch | None:
+def try_deterministic_repair(defect_class: DefectClass, body: str, target_scale: int = 2) -> Patch | None:
+    """`target_scale` is the field's own declared decimal scale (from the
+    program's ScaffoldSpec), not a value hardcoded for interest.cob's
+    fields -- see 2026-08-12 audit. Only SCALE's patcher actually uses it;
+    SIGN/PADDING ignore it, kept in the same signature so PATCHERS stays a
+    uniform dispatch table."""
     patcher = PATCHERS.get(defect_class)
     if patcher is None:
         return None
     try:
-        return patcher(body)
+        return patcher(body, target_scale)
     except NoPatchAvailable:
         return None
 

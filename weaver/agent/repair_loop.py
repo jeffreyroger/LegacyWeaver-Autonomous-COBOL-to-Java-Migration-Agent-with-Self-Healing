@@ -26,7 +26,7 @@ from weaver.agent.prompt import SYNTHESIS_SCHEMA
 from weaver.agent.repair_deterministic import try_deterministic_repair
 from weaver.agent.repair_model import RepairAttempt, build_repair_prompt
 from weaver.agent.runspec import RunSpec
-from weaver.agent.scaffold import java_signature as scaffold_java_signature
+from weaver.agent.scaffold import field_scale as scaffold_field_scale, java_signature as scaffold_java_signature
 from weaver.agent.segment import Paragraph
 from weaver.agent.validate import auto_qualify, ValidationError, parse_response, regeneration_hint, static_reject
 from weaver.classification import Classification
@@ -99,7 +99,8 @@ def repair_unit(
             classification: Classification = best_result.classifications[0]
             failing_div = best_result.report.divergences[0]
             defect_class = classification.defect_class
-            patch = try_deterministic_repair(defect_class, best_body)
+            target_scale = scaffold_field_scale(spec.scaffold_spec, failing_div.field_name)
+            patch = try_deterministic_repair(defect_class, best_body, target_scale)
             patch_body = patch.patched_body if patch else None
 
         # --- N2: deterministic repair, no model call ---

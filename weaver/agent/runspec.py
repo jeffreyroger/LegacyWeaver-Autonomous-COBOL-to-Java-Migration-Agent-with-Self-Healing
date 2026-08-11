@@ -56,6 +56,16 @@ class RunSpec:
     model: str = DEFAULT_MODEL
     seed: int = DEFAULT_SEED
     replay: bool = False
+    # BACKEND_PLAN.md SS4.2's "candidate path or synthesis mode": when set,
+    # Orchestrator uses this file's contents as the method body for the
+    # program's one synthesis unit instead of calling synthesize_paragraph
+    # -- zero model calls, straight to compile+verify (and, if it diverges,
+    # the same repair loop a synthesized body would get). Not part of SRS
+    # SS3.9.1's `weaver migrate` flag surface, so weaver/cli.py never sets
+    # it; only the backend exposes it (CreateRunRequest.candidate_path /
+    # synthesis_mode). None (the default) means synthesis mode, unchanged
+    # from before this field existed. Added 2026-08-12.
+    candidate_body_path: Path | None = None
 
     @classmethod
     def default(cls) -> RunSpec:

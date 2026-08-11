@@ -15,7 +15,14 @@ from __future__ import annotations
 import re
 
 from weaver.agent.data_context import DataContext
-from weaver.agent.scaffold import ConditionName, INTEREST_SPEC, ScaffoldSpec, ws_accessors, ws_scaffold_owned
+from weaver.agent.scaffold import (
+    ConditionName,
+    INTEREST_SPEC,
+    ScaffoldSpec,
+    ws_accessors,
+    ws_cobol_name,
+    ws_scaffold_owned,
+)
 from weaver.agent.segment import Paragraph
 from weaver.layout import Field
 
@@ -162,14 +169,20 @@ def build_synthesis_prompt(paragraph: Paragraph, context: DataContext, java_sign
                             spec: ScaffoldSpec = INTEREST_SPEC) -> str:
     owned = ws_scaffold_owned(spec)
     accessors = ws_accessors(spec)
+    # COBOL WS name -> declared scale, so the field table states each
+    # field's own scale instead of interest.cob's two WS fields' scales
+    # (5 and 2) baked in as literal text -- see 2026-08-12 audit.
+    ws_scales = {ws_cobol_name(f.java_name): f.scale for f in spec.ws_fields}
     input_accessors = {f.name: f for f in spec.input_layout}
     field_lines = []
     for name in context.read_fields + context.written_fields:
         if name in owned:
             continue
         if name in accessors:
+            scale = ws_scales.get(name)
+            scale_desc = f"scale {scale}" if scale is not None else "scale per WorkingStorageField declaration"
             field_lines.append(
-                f"- {name}: working storage, exact decimal scale 5 or 2, accessor {_accessor(name, spec)}")
+                f"- {name}: working storage, exact decimal {scale_desc}, accessor {_accessor(name, spec)}")
             continue
         field = input_accessors.get(name)
         if field is None:

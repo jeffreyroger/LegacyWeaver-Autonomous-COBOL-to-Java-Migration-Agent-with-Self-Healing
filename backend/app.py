@@ -13,6 +13,7 @@ import json
 import re
 import shutil
 import subprocess
+import uuid
 from pathlib import Path
 
 from contextlib import asynccontextmanager
@@ -90,6 +91,24 @@ def _inference_available() -> bool:
 @app.exception_handler(ServiceError)
 def _service_error_handler(request: Request, exc: ServiceError) -> JSONResponse:
     return JSONResponse(status_code=exc.http_status, content={"error_class": exc.error_class, "message": exc.message})
+
+
+@app.exception_handler(Exception)
+def _internal_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    """BACKEND_PLAN.md §4.6: every INTERNAL error carries a trace ID.
+
+    Endpoint bodies (get_run, get_divergences, stream_events, etc.) don't
+    each wrap their own try/except -- an exception raised outside the
+    worker-thread's own handling (which already catches and records
+    FAILED lifecycle) previously fell through to FastAPI's default 500
+    with no error_class/trace ID, unlike every typed ServiceError. Found
+    in the 2026-08-12 audit. Registering a handler for the base Exception
+    does not shadow the ServiceError handler above or FastAPI's own
+    HTTPException/RequestValidationError handlers -- Starlette dispatches
+    to the most specific registered handler in the exception's MRO.
+    """
+    trace_id = uuid.uuid4().hex
+    return JSONResponse(status_code=500, content={"error_class": "INTERNAL", "message": str(exc), "trace_id": trace_id})
 
 
 @app.get("/health", response_model=HealthResponse)

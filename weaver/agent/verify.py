@@ -33,6 +33,11 @@ def verify_candidate(main_class: str, classpath: Path, golden_output: Path = GOL
     golden_lines = golden_output.read_text(encoding="utf-8").splitlines()
     input_lines = input_data.read_text(encoding="utf-8").splitlines()
 
+    # Field name -> declared decimal scale, so classification uses each
+    # field's own scale instead of a value hardcoded for interest.cob's
+    # fields (both of which happen to be scale 2) -- see 2026-08-12 audit.
+    field_scales = {f.name: f.decimal_scale for f in (*report_layout, *totals_layout) if f.numeric}
+
     with tempfile.TemporaryDirectory() as tmp:
         result = run_candidate(main_class, classpath, Path(tmp), input_data, output_filename)
 
@@ -50,6 +55,7 @@ def verify_candidate(main_class: str, classpath: Path, golden_output: Path = GOL
         div = compare_lines(i, o_line, c_line, causing_input, layout=layout)
         if div is not None:
             report.add_divergence(div)
-            classifications.append(classify(div, field_decimal_scale=2))
+            field_scale = field_scales.get(div.field_name, 2)
+            classifications.append(classify(div, field_decimal_scale=field_scale))
 
     return report, classifications

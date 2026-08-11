@@ -24,6 +24,7 @@ from rich.table import Table
 
 from weaver.agent.metrics import compute_metrics
 from weaver.agent.orchestrator import RUNS_ROOT, Orchestrator
+from weaver.agent.program_profiles import program_profile as _program_profile
 from weaver.agent.runspec import (
     DEFAULT_MAX_REPAIRS,
     DEFAULT_MODEL,
@@ -39,62 +40,6 @@ from weaver.report import Report
 console = Console()
 
 OUTPUT_FILENAME = "interest.out"
-
-
-class ProgramProfile:
-    """Per-program overrides `weaver verify`/`weaver migrate` need beyond
-    the CLI's interest-specific defaults -- report/totals layout for field
-    resolution (NFR-14: a second fixture needs no code change, only data),
-    output filename, and (for `migrate`) the agent-layer paths a second
-    program's ScaffoldSpec already produces (Step S1)."""
-
-    def __init__(self, report_layout, totals_layout, output_filename, *,
-                 scaffold_path=None, golden_output=None, reference_body_path=None,
-                 reference_paragraph_id=None, input_data=None, scaffold_spec=None):
-        self.report_layout = report_layout
-        self.totals_layout = totals_layout
-        self.output_filename = output_filename
-        self.scaffold_path = scaffold_path
-        self.golden_output = golden_output
-        self.reference_body_path = reference_body_path
-        self.reference_paragraph_id = reference_paragraph_id
-        self.input_data = input_data
-        # Field/accessor/signature tables the synthesis/repair prompts derive
-        # their per-program content from (generalized post-S1: these were
-        # previously hardcoded to interest.cob throughout weaver/agent/, so
-        # a second program's synthesis prompt silently described interest's
-        # fields -- see weaver/agent/scaffold.py's ScaffoldSpec).
-        self.scaffold_spec = scaffold_spec
-
-
-def _feecalc_profile() -> ProgramProfile:
-    # Imported lazily so a plain `weaver verify` on interest.cob never pays
-    # for loading the second program's modules.
-    from weaver.agent import feecalc_layout
-    from weaver.agent.feecalc_spec import FEECALC_SPEC
-    return ProgramProfile(
-        report_layout=feecalc_layout.REPORT_LAYOUT,
-        totals_layout=feecalc_layout.TOTALS_LAYOUT,
-        output_filename="fee.out",
-        scaffold_path=Path("generated/feecalc/Scaffold.java"),
-        golden_output=Path("fixtures/data_feecalc/expected/golden_feecalc.out"),
-        reference_body_path=Path("reference_feecalc/compute_fee.body.java"),
-        reference_paragraph_id=FEECALC_SPEC.paragraph_id,
-        input_data=Path("fixtures/data_feecalc/fees.dat"),
-        scaffold_spec=FEECALC_SPEC,
-    )
-
-
-# Matched against the COBOL source's filename, not its full path, so the
-# fixture can move without breaking this lookup.
-PROGRAM_PROFILES: dict[str, ProgramProfile] = {
-    "feecalc.cob": _feecalc_profile,
-}
-
-
-def _program_profile(cobol_source: Path) -> ProgramProfile | None:
-    factory = PROGRAM_PROFILES.get(cobol_source.name)
-    return factory() if factory else None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -180,6 +125,15 @@ def run_report(args: argparse.Namespace) -> int:
     trace_path = args.run_dir / "trace.jsonl"
     state_path = args.run_dir / "orchestrator_state.json"
     m4_path = args.run_dir / "m4_baseline.json"
+    # A run interrupted before its first unit finished (or still RUNNING)
+    # has no orchestrator_state.json yet -- report that cleanly instead of
+    # letting FileNotFoundError surface as a raw traceback (2026-08-12 audit).
+    missing = [p for p in (trace_path, state_path) if not p.exists()]
+    if missing:
+        console.print(f"[red]Cannot compute metrics for {args.run_dir}: "
+                       f"missing {', '.join(str(p.name) for p in missing)} "
+                       f"(run may still be in progress or never started).[/red]")
+        return 1
     metrics = compute_metrics(trace_path, state_path, m4_path)
     print(json.dumps(dataclasses.asdict(metrics), indent=2))
     return 0

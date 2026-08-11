@@ -19,6 +19,7 @@ from weaver.agent.attribution import verify_unit
 from weaver.agent.memory import MemoryCase, embed
 from weaver.agent.metrics import compute_metrics
 from weaver.agent.orchestrator import Orchestrator, UnitResult
+from weaver.agent.program_profiles import program_profile
 from weaver.agent.runspec import RunSpec
 from weaver.agent.signature import build_signature
 from weaver.classification import Classification, DefectClass
@@ -31,6 +32,42 @@ from backend.models import CreateRunRequest
 RUNS_ROOT = Path("generated/runs")
 
 LIFECYCLE_TERMINAL = {"COMPLETED", "PARTIAL", "FAILED", "CANCELLED"}
+
+
+def _build_run_spec(request: CreateRunRequest) -> RunSpec:
+    """Translate a CreateRunRequest into the RunSpec the orchestrator runs.
+
+    Mirrors weaver/cli.py's build_migrate_spec: every parameter that
+    reaches this function must land in the RunSpec, and per-program
+    defaults (scaffold_path/golden_output/reference_body_path/
+    scaffold_spec) come from the same ProgramProfile registry the CLI
+    uses, not silently interest.cob's -- both were CLAUDE.md rule 13/
+    DC-5/NFR-D1 violations found in the 2026-08-12 audit: seed, model,
+    max_repairs, replay, and copybook_dir were dropped entirely, and no
+    program-specific profile was ever consulted, so any backend-launched
+    run against a program other than interest.cob would have silently
+    verified against interest.cob's scaffold and golden output.
+    """
+    defaults = RunSpec.default()
+    cobol_source = Path(request.cobol_source)
+    profile = program_profile(cobol_source)
+    return RunSpec(
+        cobol_source=cobol_source,
+        copybook_dir=Path(request.copybook_dir) if request.copybook_dir else None,
+        input_data=Path(request.data_file),
+        golden_output=(profile.golden_output if profile else None) or defaults.golden_output,
+        scaffold_path=(profile.scaffold_path if profile else None) or defaults.scaffold_path,
+        memory_store_path=defaults.memory_store_path,
+        reference_body_path=(profile.reference_body_path if profile else None) or defaults.reference_body_path,
+        reference_paragraph_id=(profile.reference_paragraph_id if profile else None)
+                                or defaults.reference_paragraph_id,
+        scaffold_spec=(profile.scaffold_spec if profile else None) or defaults.scaffold_spec,
+        candidate_body_path=Path(request.candidate_path) if not request.synthesis_mode else None,
+        max_repairs=request.max_repair_attempts,
+        model=request.model_name,
+        seed=request.seed,
+        replay=request.replay,
+    )
 
 
 @dataclass
@@ -78,6 +115,10 @@ class RunManager:
     def create_run(self, req: CreateRunRequest) -> RunRecord:
         if not req.cobol_source or not req.data_file:
             raise InvalidRequestError("cobol_source and data_file are required")
+        if not req.synthesis_mode and not req.candidate_path:
+            raise InvalidRequestError("synthesis_mode=false requires candidate_path")
+        if not req.synthesis_mode and not Path(req.candidate_path).exists():
+            raise InvalidRequestError(f"candidate_path does not exist: {req.candidate_path}")
 
         run_id = uuid.uuid4().hex
         run_dir = RUNS_ROOT / run_id
@@ -219,16 +260,14 @@ class RunManager:
             record.lifecycle = "RUNNING"
             self._write_lifecycle(record)
             try:
-                spec = RunSpec.default().replace(
-                    cobol_source=Path(record.request.cobol_source),
-                    input_data=Path(record.request.data_file),
-                )
+                spec = _build_run_spec(record.request)
                 orchestrator = Orchestrator(
                     spec=spec,
                     trace_path=record.trace_path,
                     state_path=record.state_path,
                     on_event=lambda event: record.event_bus.publish(event),
                     cancel_requested=record.cancel_requested,
+                    results_lock=record.lock,
                 )
                 record.orchestrator = orchestrator
                 orchestrator.run()
@@ -301,10 +340,7 @@ class RunManager:
             record.lifecycle = "RUNNING"
             self._write_lifecycle(record)
             try:
-                spec = RunSpec.default().replace(
-                    cobol_source=Path(record.request.cobol_source),
-                    input_data=Path(record.request.data_file),
-                )
+                spec = _build_run_spec(record.request)
                 orchestrator = Orchestrator(
                     spec=spec,
                     trace_path=record.trace_path,
@@ -312,6 +348,7 @@ class RunManager:
                     on_event=lambda event: record.event_bus.publish(event),
                     cancel_requested=record.cancel_requested,
                     fresh_trace=False,
+                    results_lock=record.lock,
                 )
                 orchestrator.results.update(committed_results)
                 record.orchestrator = orchestrator

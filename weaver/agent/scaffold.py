@@ -123,6 +123,19 @@ def ws_field_names(spec: ScaffoldSpec) -> tuple[str, ...]:
     return tuple(ws_cobol_name(f.java_name) for f in spec.ws_fields) + ("WS-EOF-FLAG",)
 
 
+def field_scale(spec: ScaffoldSpec, field_name: str, default: int = 2) -> int:
+    """The declared decimal scale for a report/totals field name, looked up
+    from the program's own ScaffoldSpec instead of a value hardcoded for
+    interest.cob's fields (appliedRate/interest/totalInterest, which all
+    happen to be scale 2 or 5) -- see 2026-08-12 audit. `default` only
+    applies if the name isn't found in either layout, which should not
+    happen for a divergence's field_name in practice."""
+    for f in (*spec.report_layout, *spec.totals_layout):
+        if f.name == field_name and f.numeric:
+            return f.decimal_scale
+    return default
+
+
 def _java_field_name(cobol_name: str) -> str:
     """AR-BALANCE -> balance, RL-INTEREST -> interest, TL-TOTAL -> total."""
     parts = cobol_name.split("-")[1:]
@@ -236,7 +249,9 @@ def _line_class(class_name: str, layout: tuple[Field, ...]) -> str:
     encode_parts = []
     for f in fields:
         jname = _java_field_name(f.name)
-        if f.numeric:
+        if f.numeric and f.edit_style == "zero_padded":
+            encode_parts.append(f"CobolEdit.zeroPadded({jname}, {f.width})")
+        elif f.numeric:
             encode_parts.append(f"CobolEdit.floatingSign({jname}, {f.width}, {f.decimal_scale})")
         else:
             encode_parts.append(f'Scaffold.pad({jname}, {f.width})')

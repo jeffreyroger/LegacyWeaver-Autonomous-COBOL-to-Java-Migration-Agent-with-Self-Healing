@@ -9,17 +9,27 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
+from weaver.agent.runspec import DEFAULT_MAX_REPAIRS, DEFAULT_MODEL, DEFAULT_SEED
+
 
 class CreateRunRequest(BaseModel):
     cobol_source: str
     copybook_dir: str | None = None
     data_file: str
+    # BACKEND_PLAN.md §4.2's "candidate path or synthesis mode": when
+    # synthesis_mode is False, candidate_path must point at a Java method
+    # body file used directly instead of calling the model (zero inference
+    # calls) -- RunManager.create_run validates the pairing and existence,
+    # _build_run_spec threads it into RunSpec.candidate_body_path, and
+    # Orchestrator._process_unit skips synthesize_paragraph when set. Only
+    # supports single-synthesis-unit programs (Orchestrator.run() raises
+    # otherwise) -- implemented 2026-08-12.
     candidate_path: str | None = None
     synthesis_mode: bool = True
-    seed: int = 0
-    model_name: str = ""
+    seed: int = DEFAULT_SEED
+    model_name: str = DEFAULT_MODEL
     model_digest: str = ""
-    max_repair_attempts: int = 2
+    max_repair_attempts: int = DEFAULT_MAX_REPAIRS
     replay: bool = False
 
 

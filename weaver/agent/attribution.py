@@ -65,6 +65,9 @@ def verify_unit(unit_id: str, candidate_body: str, work_dir: Path,
         "Scaffold", build_dir,
         golden_output=spec.golden_output,
         input_data=spec.input_data,
+        output_filename=spec.scaffold_spec.output_file,
+        report_layout=spec.scaffold_spec.report_layout,
+        totals_layout=spec.scaffold_spec.totals_layout,
     )
     return AttributionResult(unit_id, report, classifications, True, None)
 

@@ -41,6 +41,7 @@ class FakeOrchestrator:
     on_event: object = None
     cancel_requested: threading.Event | None = None
     fresh_trace: bool = True
+    results_lock: threading.Lock | None = None
     results: dict = field(default_factory=dict)
 
     def __post_init__(self):
