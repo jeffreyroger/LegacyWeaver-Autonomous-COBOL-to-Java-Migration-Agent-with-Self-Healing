@@ -15,14 +15,15 @@ from weaver.agent.assemble import assemble
 from weaver.agent.data_context import build_context
 from weaver.agent.inference import InferenceClient, InferenceRequest
 from weaver.agent.prompt import SYNTHESIS_SCHEMA, build_synthesis_prompt
+from weaver.agent.runspec import RunSpec
+from weaver.agent.scaffold import java_signature as scaffold_java_signature
 from weaver.agent.segment import Paragraph, segment
 from weaver.agent.validate import (
     SynthesizedBody, ValidationError, auto_qualify, parse_response, regeneration_hint, static_reject,
 )
 
 MAX_REGENERATE_ATTEMPTS = 3  # M2: regenerate up to twice, then escalate as synthesis failure
-JAVA_SIGNATURE = "static void processRecord(AccountRecord ar, WorkingStorage ws)"
-ALLOWED_IDENTIFIERS = {"ar", "ws"}
+ALLOWED_IDENTIFIERS = {"ar", "ws"}  # true for every ScaffoldSpec -- the method signature always takes (ar, ws)
 
 
 class SynthesisFailure(RuntimeError):
@@ -38,9 +39,13 @@ class SynthesisResult:
     raw_responses: list[str]
 
 
-def synthesize_paragraph(paragraph: Paragraph, client: InferenceClient) -> SynthesisResult:
-    context = build_context(paragraph)
-    prompt = build_synthesis_prompt(paragraph, context, JAVA_SIGNATURE)
+def synthesize_paragraph(paragraph: Paragraph, client: InferenceClient, *, spec: RunSpec | None = None,
+                          ) -> SynthesisResult:
+    spec = spec or RunSpec.default()
+    scaffold_spec = spec.scaffold_spec
+    context = build_context(paragraph, scaffold_spec)
+    java_signature = scaffold_java_signature(scaffold_spec)
+    prompt = build_synthesis_prompt(paragraph, context, java_signature, scaffold_spec)
 
     raw_responses: list[str] = []
     last_error: ValidationError | None = None
@@ -79,9 +84,9 @@ class CompileResult:
 
 def assemble_and_compile(scaffold_path: Path, paragraph_id: str, body: str,
                           out_path: Path, build_dir: Path) -> CompileResult:
-    assembled = assemble(scaffold_path.read_text(), {paragraph_id: body})
+    assembled = assemble(scaffold_path.read_text(encoding="utf-8"), {paragraph_id: body})
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(assembled)
+    out_path.write_text(assembled, encoding="utf-8")
 
     build_dir.mkdir(parents=True, exist_ok=True)
     proc = subprocess.run(
@@ -105,7 +110,7 @@ if __name__ == "__main__":
     scaffold_path = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("generated/Scaffold.java")
     out_dir = Path(sys.argv[3]) if len(sys.argv) > 3 else Path("generated/synthesis")
 
-    paragraphs = {p.identifier: p for p in segment(cobol_path.read_text())}
+    paragraphs = {p.identifier: p for p in segment(cobol_path.read_text(encoding="utf-8"))}
     target = paragraphs["PROCESS-RECORD"]
 
     client = InferenceClient(cache_dir=Path("generated/model_cache"))

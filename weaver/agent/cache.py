@@ -47,11 +47,11 @@ class PromptCache:
                     f"(payload keys: {sorted(payload.keys())})"
                 )
             return None
-        return json.loads(path.read_text())
+        return json.loads(path.read_text(encoding="utf-8"))
 
     def put(self, payload: dict[str, Any], response: dict[str, Any]) -> str:
         key = request_hash(payload)
-        self._path(key).write_text(json.dumps(response, indent=2, sort_keys=True))
+        self._path(key).write_text(json.dumps(response, indent=2, sort_keys=True), encoding="utf-8")
         return key
 
     def call_count(self) -> int:

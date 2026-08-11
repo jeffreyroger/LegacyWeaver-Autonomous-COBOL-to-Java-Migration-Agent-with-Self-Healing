@@ -65,7 +65,7 @@ class Orchestrator:
     def __post_init__(self) -> None:
         self.trace_path.parent.mkdir(parents=True, exist_ok=True)
         if self.fresh_trace:
-            self.trace_path.write_text("")  # fresh trace per run
+            self.trace_path.write_text("", encoding="utf-8")  # fresh trace per run
         else:
             self.trace_path.touch(exist_ok=True)  # resume: append, never truncate
         self.client = InferenceClient(
@@ -93,7 +93,7 @@ class Orchestrator:
     def _plan(self) -> list[Paragraph]:
         # perceive
         t0 = time.monotonic()
-        paragraphs = segment(self.cobol_source.read_text())
+        paragraphs = segment(self.cobol_source.read_text(encoding="utf-8"))
         self._emit("*", "perceive", "segment", time.monotonic() - t0, outcome=f"{len(paragraphs)} paragraphs found")
 
         # plan: only non-control-flow paragraphs are synthesis units (K1 --
@@ -109,7 +109,7 @@ class Orchestrator:
 
         # synthesise
         t0 = time.monotonic()
-        synth = synthesize_paragraph(unit, self.client)
+        synth = synthesize_paragraph(unit, self.client, spec=self.spec)
         model_calls += synth.validation_attempts
         self._emit(unit.identifier, "synthesise", "generate", time.monotonic() - t0,
                     model_calls=synth.validation_attempts, outcome="ok" if synth.body else "synthesis_failure")
@@ -237,7 +237,7 @@ class Orchestrator:
         for unit_id, r in self.results.items():
             d = asdict(r)
             payload[unit_id] = d
-        self.state_path.write_text(json.dumps(payload, indent=2, default=str))
+        self.state_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
 
 
 if __name__ == "__main__":

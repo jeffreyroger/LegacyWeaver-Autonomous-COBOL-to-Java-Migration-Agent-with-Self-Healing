@@ -14,6 +14,7 @@ byte-identical-output acceptance test still holds for it unchanged).
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from weaver.agent.cobol_edit import JAVA_SOURCE as COBOL_EDIT_JAVA
@@ -86,6 +87,40 @@ INTEREST_SPEC = ScaffoldSpec(
         "TL-TOTAL": "ws.totalInterest", "TL-FILLER": '" "',
     },
 )
+
+
+def ws_cobol_name(java_name: str) -> str:
+    """Inverse of _java_field_name for WORKING-STORAGE items: "totalFee" ->
+    "WS-TOTAL-FEE". Deterministic from the naming convention every
+    ScaffoldSpec.ws_fields entry already follows (see K2/S1) -- there is no
+    separate COBOL-name table to keep in sync."""
+    parts = re.findall(r"[A-Z]?[a-z0-9]+|[A-Z]+(?=[A-Z]|$)", java_name)
+    return "WS-" + "-".join(p.upper() for p in parts)
+
+
+def java_signature(spec: ScaffoldSpec) -> str:
+    return f"static void {spec.paragraph_method}(AccountRecord ar, WorkingStorage ws)"
+
+
+def ws_accessors(spec: ScaffoldSpec) -> dict[str, str]:
+    """COBOL WORKING-STORAGE name -> Java accessor, for every ws_fields entry
+    except the accumulator (scaffold-owned, see ws_scaffold_owned)."""
+    return {
+        ws_cobol_name(f.java_name): f"ws.{f.java_name}"
+        for f in spec.ws_fields
+        if f.java_name != spec.accumulator_field
+    }
+
+
+def ws_scaffold_owned(spec: ScaffoldSpec) -> set[str]:
+    """WORKING-STORAGE names the generated main loop owns, never the
+    synthesized paragraph body: the running-total accumulator and the EOF
+    flag driving the PERFORM UNTIL loop."""
+    return {ws_cobol_name(spec.accumulator_field), "WS-EOF-FLAG"}
+
+
+def ws_field_names(spec: ScaffoldSpec) -> tuple[str, ...]:
+    return tuple(ws_cobol_name(f.java_name) for f in spec.ws_fields) + ("WS-EOF-FLAG",)
 
 
 def _java_field_name(cobol_name: str) -> str:
@@ -363,5 +398,5 @@ if __name__ == "__main__":
 
     out_path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("generated/Scaffold.java")
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(generate())
+    out_path.write_text(generate(), encoding="utf-8")
     print(f"wrote {out_path}")

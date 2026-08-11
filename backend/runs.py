@@ -86,7 +86,7 @@ class RunManager:
         record = RunRecord(run_id=run_id, request=req, run_dir=run_dir)
         # Persist determinism-affecting parameters before the first unit
         # executes -- the reproducibility record required by NFR-D1/§4.2.
-        record.params_path.write_text(json.dumps(req.model_dump(), indent=2))
+        record.params_path.write_text(json.dumps(req.model_dump(), indent=2), encoding="utf-8")
         self._write_lifecycle(record)
 
         with self._registry_lock:
@@ -170,7 +170,7 @@ class RunManager:
 
         record.escalation_decisions[unit_id] = outcome
         (record.run_dir / "escalation_decisions.json").write_text(
-            json.dumps(record.escalation_decisions, indent=2)
+            json.dumps(record.escalation_decisions, indent=2), encoding="utf-8"
         )
         return outcome
 
@@ -255,7 +255,7 @@ class RunManager:
     def _write_lifecycle(self, record: RunRecord) -> None:
         record.lifecycle_path.write_text(json.dumps({
             "run_id": record.run_id, "lifecycle": record.lifecycle, "error": record.error,
-        }, indent=2))
+        }, indent=2), encoding="utf-8")
 
     def _scan_for_interrupted_runs(self) -> None:
         """On startup, any run left RUNNING with no live process is
@@ -266,10 +266,10 @@ class RunManager:
             lifecycle_path = run_dir / "lifecycle.json"
             if not lifecycle_path.exists():
                 continue
-            data = json.loads(lifecycle_path.read_text())
+            data = json.loads(lifecycle_path.read_text(encoding="utf-8"))
             if data.get("lifecycle") == "RUNNING":
                 data["lifecycle"] = "INTERRUPTED"
-                lifecycle_path.write_text(json.dumps(data, indent=2))
+                lifecycle_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
     def resume_run(self, run_id: str) -> RunRecord:
         """Reload an INTERRUPTED run's state and continue from the first
@@ -280,7 +280,7 @@ class RunManager:
 
         committed_results: dict[str, UnitResult] = {}
         if record.state_path.exists():
-            saved = json.loads(record.state_path.read_text())
+            saved = json.loads(record.state_path.read_text(encoding="utf-8"))
             for uid, r in saved.items():
                 if r["status"] == "committed":
                     committed_results[uid] = UnitResult(

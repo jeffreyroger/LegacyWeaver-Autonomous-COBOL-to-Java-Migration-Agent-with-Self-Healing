@@ -11,17 +11,14 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field as dc_field
 
-from weaver.agent.scaffold import CONDITION_NAMES, ConditionName
+from weaver.agent.scaffold import ConditionName, INTEREST_SPEC, ScaffoldSpec, ws_field_names
 from weaver.agent.segment import Paragraph
-from weaver.layout import INPUT_LAYOUT, Field
+from weaver.layout import Field
 
-# WORKING-STORAGE items are not in weaver.layout (that module is scoped to
-# the MVP harness's I/O byte layouts, SRS §5.1/5.2), so they're declared
-# here — still data, not parsed from source, matching K's approach to
-# condition names.
-WORKING_STORAGE_FIELDS: tuple[str, ...] = (
-    "WS-EOF-FLAG", "WS-APPLIED-RATE", "WS-INTEREST", "WS-TOTAL-INTEREST",
-)
+# Kept for backward compatibility (interest.cob's WORKING-STORAGE names);
+# a second program derives its own set from its ScaffoldSpec via
+# ws_field_names() instead of a hand-copied tuple (Step S1).
+WORKING_STORAGE_FIELDS: tuple[str, ...] = ws_field_names(INTEREST_SPEC)
 
 _WRITE_VERBS = (
     "MOVE", "COMPUTE", "ADD", "SUBTRACT", "MULTIPLY", "DIVIDE", "SET", "INITIALIZE",
@@ -42,16 +39,18 @@ class DataContext:
     condition_names: tuple[ConditionName, ...]
 
 
-def _all_identifiers() -> dict[str, Field]:
-    return {f.name: f for f in INPUT_LAYOUT}
+def _all_identifiers(spec: ScaffoldSpec) -> dict[str, Field]:
+    return {f.name: f for f in spec.input_layout}
 
 
 def _tokens(text: str) -> set[str]:
     return set(re.findall(r"[A-Z][A-Z0-9-]*", text.upper()))
 
 
-def build_context(paragraph: Paragraph) -> DataContext:
-    known_fields = list(_all_identifiers().keys()) + list(WORKING_STORAGE_FIELDS)
+def build_context(paragraph: Paragraph, spec: ScaffoldSpec = INTEREST_SPEC) -> DataContext:
+    ws_fields = ws_field_names(spec)
+    condition_names = spec.condition_names
+    known_fields = list(_all_identifiers(spec).keys()) + list(ws_fields)
     present = {name for name in known_fields if name in _tokens(paragraph.source)}
 
     written: set[str] = set()
@@ -72,7 +71,7 @@ def build_context(paragraph: Paragraph) -> DataContext:
 
     # Attach any condition name whose parent field appears in the paragraph.
     conditions = tuple(
-        c for c in CONDITION_NAMES
+        c for c in condition_names
         if c.parent_field in present or c.parent_field in read or c.parent_field in written
     )
 
@@ -81,7 +80,7 @@ def build_context(paragraph: Paragraph) -> DataContext:
         # to the full field table rather than sending nothing.
         read = set(known_fields)
         written = set()
-        conditions = CONDITION_NAMES
+        conditions = condition_names
 
     return DataContext(
         paragraph_id=paragraph.identifier,
@@ -97,7 +96,7 @@ if __name__ == "__main__":
 
     from weaver.agent.segment import segment
 
-    src = Path(sys.argv[1]).read_text()
+    src = Path(sys.argv[1]).read_text(encoding="utf-8")
     for p in segment(src):
         ctx = build_context(p)
         print(f"{ctx.paragraph_id}:")

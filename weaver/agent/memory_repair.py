@@ -70,7 +70,7 @@ if __name__ == "__main__":
     # and applied here in "run two" against a FRESH instance of the same
     # defect class, with zero model/inference calls in this repair step.
     memory = FailureMemory(SEED_STORE_PATH)
-    fresh_body = Path("generated/o3_case_b_body.java").read_text()  # same .negate() defect, fresh instance
+    fresh_body = Path("generated/o3_case_b_body.java").read_text(encoding="utf-8")  # same .negate() defect, fresh instance
     classification = Classification(DefectClass.SIGN, 1.0, {"oracle": "0.10", "candidate": "-0.10"})
 
     t0 = time.monotonic()

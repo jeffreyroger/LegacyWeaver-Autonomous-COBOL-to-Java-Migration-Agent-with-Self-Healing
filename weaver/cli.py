@@ -41,6 +41,62 @@ console = Console()
 OUTPUT_FILENAME = "interest.out"
 
 
+class ProgramProfile:
+    """Per-program overrides `weaver verify`/`weaver migrate` need beyond
+    the CLI's interest-specific defaults -- report/totals layout for field
+    resolution (NFR-14: a second fixture needs no code change, only data),
+    output filename, and (for `migrate`) the agent-layer paths a second
+    program's ScaffoldSpec already produces (Step S1)."""
+
+    def __init__(self, report_layout, totals_layout, output_filename, *,
+                 scaffold_path=None, golden_output=None, reference_body_path=None,
+                 reference_paragraph_id=None, input_data=None, scaffold_spec=None):
+        self.report_layout = report_layout
+        self.totals_layout = totals_layout
+        self.output_filename = output_filename
+        self.scaffold_path = scaffold_path
+        self.golden_output = golden_output
+        self.reference_body_path = reference_body_path
+        self.reference_paragraph_id = reference_paragraph_id
+        self.input_data = input_data
+        # Field/accessor/signature tables the synthesis/repair prompts derive
+        # their per-program content from (generalized post-S1: these were
+        # previously hardcoded to interest.cob throughout weaver/agent/, so
+        # a second program's synthesis prompt silently described interest's
+        # fields -- see weaver/agent/scaffold.py's ScaffoldSpec).
+        self.scaffold_spec = scaffold_spec
+
+
+def _feecalc_profile() -> ProgramProfile:
+    # Imported lazily so a plain `weaver verify` on interest.cob never pays
+    # for loading the second program's modules.
+    from weaver.agent import feecalc_layout
+    from weaver.agent.feecalc_spec import FEECALC_SPEC
+    return ProgramProfile(
+        report_layout=feecalc_layout.REPORT_LAYOUT,
+        totals_layout=feecalc_layout.TOTALS_LAYOUT,
+        output_filename="fee.out",
+        scaffold_path=Path("generated/feecalc/Scaffold.java"),
+        golden_output=Path("fixtures/data_feecalc/expected/golden_feecalc.out"),
+        reference_body_path=Path("reference_feecalc/compute_fee.body.java"),
+        reference_paragraph_id=FEECALC_SPEC.paragraph_id,
+        input_data=Path("fixtures/data_feecalc/fees.dat"),
+        scaffold_spec=FEECALC_SPEC,
+    )
+
+
+# Matched against the COBOL source's filename, not its full path, so the
+# fixture can move without breaking this lookup.
+PROGRAM_PROFILES: dict[str, ProgramProfile] = {
+    "feecalc.cob": _feecalc_profile,
+}
+
+
+def _program_profile(cobol_source: Path) -> ProgramProfile | None:
+    factory = PROGRAM_PROFILES.get(cobol_source.name)
+    return factory() if factory else None
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="weaver", description="LegacyWeaver differential verification harness")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -157,6 +213,11 @@ def _compile_candidate(java_candidate: Path) -> tuple[str, Path]:
 
 
 def run_verify(args: argparse.Namespace) -> int:
+    profile = _program_profile(args.cobol_source)
+    output_filename = profile.output_filename if profile else OUTPUT_FILENAME
+    report_layout = profile.report_layout if profile else REPORT_LAYOUT
+    totals_layout = profile.totals_layout if profile else TOTALS_LAYOUT
+
     oracle_binary = _compile_oracle(args.cobol_source)
     main_class, classpath = _compile_candidate(args.java_candidate)
 
@@ -165,8 +226,8 @@ def run_verify(args: argparse.Namespace) -> int:
         oracle_dir = tmp_path / "oracle"
         candidate_dir = tmp_path / "candidate"
 
-        oracle_result = run_oracle(oracle_binary, oracle_dir, args.input_data, OUTPUT_FILENAME)
-        candidate_result = run_candidate(main_class, classpath, candidate_dir, args.input_data, OUTPUT_FILENAME)
+        oracle_result = run_oracle(oracle_binary, oracle_dir, args.input_data, output_filename)
+        candidate_result = run_candidate(main_class, classpath, candidate_dir, args.input_data, output_filename)
 
     exit_codes_match = oracle_result.exit_code == candidate_result.exit_code
 
@@ -184,7 +245,7 @@ def run_verify(args: argparse.Namespace) -> int:
         o_line = normalize_line_endings(oracle_lines[i]) if i < len(oracle_lines) else ""
         c_line = normalize_line_endings(candidate_lines[i]) if i < len(candidate_lines) else ""
         causing_input = input_lines[i] if i < len(input_lines) else None
-        layout = REPORT_LAYOUT if i < len(input_lines) else TOTALS_LAYOUT
+        layout = report_layout if i < len(input_lines) else totals_layout
 
         div = compare_lines(i, o_line, c_line, causing_input, layout=layout)
         if div is not None:
@@ -194,7 +255,7 @@ def run_verify(args: argparse.Namespace) -> int:
     class_summary = summarize(classifications) if classifications else {}
 
     _render_summary(report, class_summary)
-    args.report.write_text(report.to_json())
+    args.report.write_text(report.to_json(), encoding="utf-8")
     console.print(f"[cyan]Report written to[/cyan] {args.report}")
 
     return 0 if report.verified else 1
@@ -240,14 +301,19 @@ def build_migrate_spec(args: argparse.Namespace) -> RunSpec:
     reaches the orchestrator is the exact defect Task 1 fixed.
     """
     defaults = RunSpec.default()
+    profile = _program_profile(args.program)
     return RunSpec(
         cobol_source=args.program,
         copybook_dir=args.copybook,
-        input_data=args.data or defaults.input_data,
+        input_data=args.data or (profile.input_data if profile else None) or defaults.input_data,
         out_dir=args.out,
-        golden_output=defaults.golden_output,
-        scaffold_path=defaults.scaffold_path,
+        golden_output=(profile.golden_output if profile else None) or defaults.golden_output,
+        scaffold_path=(profile.scaffold_path if profile else None) or defaults.scaffold_path,
         memory_store_path=defaults.memory_store_path,
+        reference_body_path=(profile.reference_body_path if profile else None) or defaults.reference_body_path,
+        reference_paragraph_id=(profile.reference_paragraph_id if profile else None)
+                                or defaults.reference_paragraph_id,
+        scaffold_spec=(profile.scaffold_spec if profile else None) or defaults.scaffold_spec,
         max_repairs=args.max_repairs,
         model=args.model,
         seed=args.seed,
@@ -333,7 +399,7 @@ def run_migrate(args: argparse.Namespace) -> int:
 
     # NFR-D1 reproducibility record, written before the first unit executes.
     # Every value here actually influences the run -- see weaver/agent/runspec.py.
-    (run_dir / "params.json").write_text(json.dumps(spec.to_dict(), indent=2))
+    (run_dir / "params.json").write_text(json.dumps(spec.to_dict(), indent=2), encoding="utf-8")
 
     cancel_requested = threading.Event()
     orchestrator = Orchestrator(

@@ -12,8 +12,10 @@ explicitly.
 from __future__ import annotations
 
 import dataclasses
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+
+from weaver.agent.scaffold import INTEREST_SPEC, ScaffoldSpec
 
 # Defaults copied verbatim from SRS SS3.9.1.
 DEFAULT_MAX_REPAIRS = 3
@@ -25,6 +27,8 @@ DEFAULT_INPUT_DATA = Path("fixtures/data/accounts.dat")
 DEFAULT_GOLDEN_OUTPUT = Path("fixtures/data/expected/golden_interest.out")
 DEFAULT_SCAFFOLD_PATH = Path("generated/Scaffold.java")
 DEFAULT_MEMORY_STORE = Path("generated/failure_memory.json")
+DEFAULT_REFERENCE_BODY_PATH = Path("reference/process_record.body.java")
+DEFAULT_REFERENCE_PARAGRAPH_ID = "PROCESS-RECORD"
 
 
 @dataclass(frozen=True)
@@ -36,6 +40,18 @@ class RunSpec:
     golden_output: Path = DEFAULT_GOLDEN_OUTPUT
     scaffold_path: Path = DEFAULT_SCAFFOLD_PATH
     memory_store_path: Path = DEFAULT_MEMORY_STORE
+    # Which paragraph attribution.py treats as "the reference implementation
+    # to hold constant while attributing a divergence to the unit under
+    # test" (N1), and where its known-correct body lives. Interest-specific
+    # defaults preserve every pre-existing call site; a second program
+    # (Step S1/S2's FEECALC) overrides both -- see cli.py's PROGRAM_SPECS.
+    reference_body_path: Path = DEFAULT_REFERENCE_BODY_PATH
+    reference_paragraph_id: str = DEFAULT_REFERENCE_PARAGRAPH_ID
+    # Field/accessor/signature tables that build_context/build_synthesis_prompt/
+    # synthesize_paragraph derive their per-program content from (Step S1
+    # generalization) -- interest.cob's INTEREST_SPEC by default, overridden
+    # per program via cli.py's PROGRAM_PROFILES.
+    scaffold_spec: ScaffoldSpec = field(default_factory=lambda: INTEREST_SPEC)
     max_repairs: int = DEFAULT_MAX_REPAIRS
     model: str = DEFAULT_MODEL
     seed: int = DEFAULT_SEED
@@ -54,5 +70,10 @@ class RunSpec:
         out: dict[str, str | int | bool | None] = {}
         for f in dataclasses.fields(self):
             value = getattr(self, f.name)
-            out[f.name] = str(value) if isinstance(value, Path) else value
+            if isinstance(value, Path):
+                out[f.name] = str(value)
+            elif isinstance(value, ScaffoldSpec):
+                out[f.name] = value.paragraph_id
+            else:
+                out[f.name] = value
         return out

@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from weaver.agent.prompt import _scaffold_owned_lines
+from weaver.agent.scaffold import INTEREST_SPEC, ScaffoldSpec
 from weaver.agent.segment import Paragraph
 from weaver.classification import Classification, DefectClass
 from weaver.comparison import Divergence
@@ -58,6 +59,7 @@ def build_repair_prompt(
     classification: Classification | None,
     failing_divergence: Divergence | None,
     attempts: list[RepairAttempt],
+    spec: ScaffoldSpec = INTEREST_SPEC,
 ) -> str:
     strategy_hint = STRATEGY_HINTS.get(defect_class, "Diagnose from the evidence below.")
 
@@ -91,7 +93,7 @@ def build_repair_prompt(
                 history_lines.append(f"Diagnostics: {a.diagnostics}")
     history = "\n".join(history_lines)
 
-    owned_lines = _scaffold_owned_lines(paragraph)
+    owned_lines = _scaffold_owned_lines(paragraph, spec)
     if owned_lines:
         owned_list = "\n".join(f"    {line}" for line in owned_lines)
         scaffold_owned_section = f"""\

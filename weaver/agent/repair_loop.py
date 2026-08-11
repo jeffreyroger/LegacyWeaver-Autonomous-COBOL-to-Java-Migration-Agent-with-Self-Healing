@@ -26,6 +26,7 @@ from weaver.agent.prompt import SYNTHESIS_SCHEMA
 from weaver.agent.repair_deterministic import try_deterministic_repair
 from weaver.agent.repair_model import RepairAttempt, build_repair_prompt
 from weaver.agent.runspec import RunSpec
+from weaver.agent.scaffold import java_signature as scaffold_java_signature
 from weaver.agent.segment import Paragraph
 from weaver.agent.validate import auto_qualify, ValidationError, parse_response, regeneration_hint, static_reject
 from weaver.classification import Classification
@@ -33,8 +34,7 @@ from weaver.report import Report
 
 MAX_ATTEMPTS = 3
 WALL_CLOCK_CAP_SECONDS = 120
-JAVA_SIGNATURE = "static void processRecord(AccountRecord ar, WorkingStorage ws)"
-ALLOWED_IDENTIFIERS = {"ar", "ws"}
+ALLOWED_IDENTIFIERS = {"ar", "ws"}  # true for every ScaffoldSpec -- the method signature always takes (ar, ws)
 
 
 def _body_hash(body: str) -> str:
@@ -69,6 +69,7 @@ def repair_unit(
 ) -> RepairOutcome:
     spec = spec or RunSpec.default()
     max_repairs = spec.max_repairs
+    java_signature = scaffold_java_signature(spec.scaffold_spec)
 
     start_time = time.monotonic()
     attempts: list[RepairAttempt] = []
@@ -108,9 +109,9 @@ def repair_unit(
         else:
             # --- N3: model-assisted repair ---
             prompt = build_repair_prompt(
-                paragraph, JAVA_SIGNATURE, best_body, defect_class,
+                paragraph, java_signature, best_body, defect_class,
                 classification if best_result.compiled else None,
-                failing_div, attempts,
+                failing_div, attempts, spec.scaffold_spec,
             )
             response = client.generate(InferenceRequest(prompt=prompt, schema=SYNTHESIS_SCHEMA))
             try:

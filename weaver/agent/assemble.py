@@ -51,7 +51,7 @@ if __name__ == "__main__":
     paragraph_id = sys.argv[3]
     out_path = Path(sys.argv[4])
 
-    assembled = assemble(scaffold_path.read_text(), {paragraph_id: body_path.read_text()})
+    assembled = assemble(scaffold_path.read_text(encoding="utf-8"), {paragraph_id: body_path.read_text(encoding="utf-8")})
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(assembled)
+    out_path.write_text(assembled, encoding="utf-8")
     print(f"wrote {out_path}")

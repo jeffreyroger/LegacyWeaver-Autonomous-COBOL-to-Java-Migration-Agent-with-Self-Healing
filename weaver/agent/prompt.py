@@ -14,60 +14,51 @@ from __future__ import annotations
 
 import re
 
-from weaver.agent.data_context import DataContext, WORKING_STORAGE_FIELDS
-from weaver.agent.scaffold import ConditionName
+from weaver.agent.data_context import DataContext
+from weaver.agent.scaffold import ConditionName, INTEREST_SPEC, ScaffoldSpec, ws_accessors, ws_scaffold_owned
 from weaver.agent.segment import Paragraph
-from weaver.layout import INPUT_LAYOUT, REPORT_LAYOUT, TOTALS_LAYOUT, Field
-
-# Java accessor for each known identifier, keyed by COBOL name. Working-
-# storage targets the paragraph is allowed to mutate are listed separately
-# from the ones the scaffold itself owns (WS-TOTAL-INTEREST: accumulated by
-# the generated main loop, never by the paragraph -- see scaffold_spec.md
-# §6). Exposing that boundary in the prompt is what keeps "no modification
-# of the scaffold" enforceable rather than aspirational.
-_WS_ACCESSORS = {
-    "WS-APPLIED-RATE": "ws.appliedRate",
-    "WS-INTEREST": "ws.interest",
-}
-_WS_SCAFFOLD_OWNED = {"WS-TOTAL-INTEREST", "WS-EOF-FLAG"}
-
-_INPUT_ACCESSORS = {f.name: f for f in INPUT_LAYOUT}
-
-# Names the scaffold's generated main loop owns: report/totals output
-# fields (constructed via ScaffoldSpec.report_ctor_map / totals_ctor_map,
-# never by the paragraph method) and the accumulator working-storage
-# fields above. A paragraph's COBOL source routinely ends with the
-# MOVE ... TO RL-*/TL-* and WRITE statements that populate those records --
-# real-world testing (2026-08-07) showed the model translates those
-# statements literally (e.g. `rl.id = ar.id; ... reportLine.write();`)
-# because the prompt told it what fields exist but never which trailing
-# statements belong to the scaffold, not the paragraph.
-_SCAFFOLD_OWNED_TARGETS = {f.name for f in REPORT_LAYOUT} | {f.name for f in TOTALS_LAYOUT} | _WS_SCAFFOLD_OWNED
+from weaver.layout import Field
 
 _TO_TARGET_RE = re.compile(r"\bTO\s+([A-Z0-9][A-Z0-9-]*)", re.IGNORECASE)
 _WRITE_RE = re.compile(r"^\s*WRITE\b", re.IGNORECASE)
 
 
-def _scaffold_owned_lines(paragraph: Paragraph) -> list[str]:
+def _scaffold_owned_targets(spec: ScaffoldSpec) -> set[str]:
+    """Names the scaffold's generated main loop owns: report/totals output
+    fields (constructed via ScaffoldSpec.report_ctor_map / totals_ctor_map,
+    never by the paragraph method) and the accumulator working-storage
+    field. A paragraph's COBOL source routinely ends with the
+    MOVE ... TO RL-*/TL-* and WRITE statements that populate those records --
+    real-world testing (2026-08-07) showed the model translates those
+    statements literally (e.g. `rl.id = ar.id; ... reportLine.write();`)
+    because the prompt told it what fields exist but never which trailing
+    statements belong to the scaffold, not the paragraph.
+    """
+    return {f.name for f in spec.report_layout} | {f.name for f in spec.totals_layout} | ws_scaffold_owned(spec)
+
+
+def _scaffold_owned_lines(paragraph: Paragraph, spec: ScaffoldSpec = INTEREST_SPEC) -> list[str]:
     """Lines in this paragraph's source that MOVE/ADD into a scaffold-owned
     target (a report/totals field or accumulator) or WRITE a record --
     these are performed by the generated main loop and must not be
     reproduced in the returned method body.
     """
+    owned_targets = _scaffold_owned_targets(spec)
     owned_lines = []
     for line in paragraph.source.splitlines():
         target_match = _TO_TARGET_RE.search(line)
-        if target_match and target_match.group(1).upper() in _SCAFFOLD_OWNED_TARGETS:
+        if target_match and target_match.group(1).upper() in owned_targets:
             owned_lines.append(line.strip())
         elif _WRITE_RE.match(line):
             owned_lines.append(line.strip())
     return owned_lines
 
 
-def _accessor(name: str) -> str:
-    if name in _WS_ACCESSORS:
-        return _WS_ACCESSORS[name]
-    field = _INPUT_ACCESSORS.get(name)
+def _accessor(name: str, spec: ScaffoldSpec) -> str:
+    accessors = ws_accessors(spec)
+    if name in accessors:
+        return accessors[name]
+    field = {f.name: f for f in spec.input_layout}.get(name)
     if field is not None:
         if field.redefines is not None:
             java_name = "".join(
@@ -143,16 +134,19 @@ call names DOWN explicitly, and the condition is read through its boolean
 accessor, never a string comparison.
 """
 
-PROHIBITIONS = """\
+def _prohibitions(spec: ScaffoldSpec) -> str:
+    settable = ", ".join(f"ws.{a.split('.')[-1]}" for a in sorted(ws_accessors(spec).values())) or "(none)"
+    return f"""\
 Prohibitions -- the returned body must not:
 - declare or reference any field not listed in the field table below
 - declare a helper method, inner class, or import
 - modify any scaffold class (AccountRecord, ReportLine, TotalsLine,
   WorkingStorage, CobolEdit) -- you may only call the accessors it exposes
 - use float, double, Math.round, or any ROUNDED-style rounding call
-- write to ws.totalInterest -- the generated main loop owns that
-  accumulation; this paragraph only sets ws.appliedRate and ws.interest
+- write to ws.{spec.accumulator_field} -- the generated main loop owns that
+  accumulation; this paragraph only sets {settable}
 """
+
 
 OUTPUT_CONTRACT = """\
 Output contract -- respond with exactly one JSON object, nothing else
@@ -164,18 +158,23 @@ Output contract -- respond with exactly one JSON object, nothing else
 """
 
 
-def build_synthesis_prompt(paragraph: Paragraph, context: DataContext, java_signature: str) -> str:
+def build_synthesis_prompt(paragraph: Paragraph, context: DataContext, java_signature: str,
+                            spec: ScaffoldSpec = INTEREST_SPEC) -> str:
+    owned = ws_scaffold_owned(spec)
+    accessors = ws_accessors(spec)
+    input_accessors = {f.name: f for f in spec.input_layout}
     field_lines = []
     for name in context.read_fields + context.written_fields:
-        if name in _WS_SCAFFOLD_OWNED:
+        if name in owned:
             continue
-        if name in _WS_ACCESSORS:
-            field_lines.append(f"- {name}: working storage, exact decimal scale 5 or 2, accessor {_accessor(name)}")
+        if name in accessors:
+            field_lines.append(
+                f"- {name}: working storage, exact decimal scale 5 or 2, accessor {_accessor(name, spec)}")
             continue
-        field = _INPUT_ACCESSORS.get(name)
+        field = input_accessors.get(name)
         if field is None:
             continue
-        field_lines.append(f"- {name}: {_pic_description(field)}, accessor {_accessor(name)}")
+        field_lines.append(f"- {name}: {_pic_description(field)}, accessor {_accessor(name, spec)}")
     field_table = "\n".join(sorted(set(field_lines))) or "(none)"
 
     condition_lines = [
@@ -184,7 +183,7 @@ def build_synthesis_prompt(paragraph: Paragraph, context: DataContext, java_sign
     ]
     condition_table = "\n".join(condition_lines) or "(none)"
 
-    owned_lines = _scaffold_owned_lines(paragraph)
+    owned_lines = _scaffold_owned_lines(paragraph, spec)
     if owned_lines:
         owned_list = "\n".join(f"    {line}" for line in owned_lines)
         scaffold_owned_section = f"""\
@@ -192,7 +191,7 @@ Statements you must NOT translate -- the paragraph source below includes
 the following statements verbatim, but they populate the output record
 and/or the running total, which the generated main loop already does
 outside this method (see the prohibition above against writing to
-ws.totalInterest). Omit every one of these from your returned body:
+ws.{spec.accumulator_field}). Omit every one of these from your returned body:
 {owned_list}
 
 """
@@ -214,7 +213,7 @@ The method body must fit this signature (do not repeat the signature in
 your answer -- return only the statements that go inside it):
 {java_signature}
 
-{PROHIBITIONS}
+{_prohibitions(spec)}
 {scaffold_owned_section}COBOL paragraph source, verbatim ({paragraph.identifier}, lines {paragraph.start_line}-{paragraph.end_line}):
 ```
 {paragraph.source}
@@ -239,7 +238,7 @@ if __name__ == "__main__":
     from weaver.agent.data_context import build_context
     from weaver.agent.segment import segment
 
-    src = Path("fixtures/cobol/interest.cob").read_text()
+    src = Path("fixtures/cobol/interest.cob").read_text(encoding="utf-8")
     paragraphs = {p.identifier: p for p in segment(src)}
     pr = paragraphs["PROCESS-RECORD"]
     ctx = build_context(pr)

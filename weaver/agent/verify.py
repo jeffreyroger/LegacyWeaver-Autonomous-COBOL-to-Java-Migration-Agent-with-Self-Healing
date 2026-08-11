@@ -30,8 +30,8 @@ def verify_candidate(main_class: str, classpath: Path, golden_output: Path = GOL
                       input_data: Path = INPUT_DATA, output_filename: str = OUTPUT_FILENAME,
                       report_layout: tuple = REPORT_LAYOUT, totals_layout: tuple = TOTALS_LAYOUT,
                       ) -> tuple[Report, list[Classification]]:
-    golden_lines = golden_output.read_text().splitlines()
-    input_lines = input_data.read_text().splitlines()
+    golden_lines = golden_output.read_text(encoding="utf-8").splitlines()
+    input_lines = input_data.read_text(encoding="utf-8").splitlines()
 
     with tempfile.TemporaryDirectory() as tmp:
         result = run_candidate(main_class, classpath, Path(tmp), input_data, output_filename)

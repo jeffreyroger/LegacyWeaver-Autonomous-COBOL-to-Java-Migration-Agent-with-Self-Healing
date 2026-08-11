@@ -48,7 +48,7 @@ def naive_baseline_row() -> ComparisonRow:
 def unassisted_synthesis_row() -> ComparisonRow:
     if not M4_BASELINE_PATH.exists():
         return ComparisonRow("Unassisted synthesis, no repair", None, None, "M4 not yet run")
-    m4 = json.loads(M4_BASELINE_PATH.read_text())
+    m4 = json.loads(M4_BASELINE_PATH.read_text(encoding="utf-8"))
     if m4["units_compiling"] == 0:
         return ComparisonRow(
             "Unassisted synthesis, no repair (qwen2.5-coder:7b)",
@@ -62,7 +62,7 @@ def unassisted_synthesis_row() -> ComparisonRow:
 def full_agent_loop_row() -> ComparisonRow:
     if not STATE_PATH.exists():
         return ComparisonRow("Full agent loop", None, None, "orchestrator not yet run")
-    state = json.loads(STATE_PATH.read_text())
+    state = json.loads(STATE_PATH.read_text(encoding="utf-8"))
     committed = [u for u, r in state.items() if r["status"] == "committed"]
     escalated = [u for u, r in state.items() if r["status"] == "escalated"]
     if committed and not escalated:

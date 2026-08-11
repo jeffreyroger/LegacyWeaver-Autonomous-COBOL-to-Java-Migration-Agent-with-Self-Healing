@@ -48,14 +48,14 @@ def verify_unit(unit_id: str, candidate_body: str, work_dir: Path,
     """
     spec = spec or RunSpec.default()
 
-    bodies = {"PROCESS-RECORD": REFERENCE_BODY_PATH.read_text()}
+    bodies = {spec.reference_paragraph_id: spec.reference_body_path.read_text(encoding="utf-8")}
     bodies[unit_id] = candidate_body  # overwrite the unit under test
 
-    assembled = assemble(spec.scaffold_path.read_text(), bodies)
+    assembled = assemble(spec.scaffold_path.read_text(encoding="utf-8"), bodies)
     src_path = work_dir / "Scaffold.java"
     build_dir = work_dir / "build"
     work_dir.mkdir(parents=True, exist_ok=True)
-    src_path.write_text(assembled)
+    src_path.write_text(assembled, encoding="utf-8")
 
     proc = subprocess.run(["javac", "-d", str(build_dir), str(src_path)], capture_output=True, text=True)
     if proc.returncode != 0:
@@ -75,7 +75,7 @@ if __name__ == "__main__":
 
     # N1 acceptance test: deliberately corrupt PROCESS-RECORD (skip the
     # dormant zero-out) and confirm divergences appear, attributed to it.
-    corrupted = REFERENCE_BODY_PATH.read_text().replace(
+    corrupted = REFERENCE_BODY_PATH.read_text(encoding="utf-8").replace(
         'ws.interest = java.math.BigDecimal.ZERO.setScale(2);',
         'ws.interest = new java.math.BigDecimal("999.99");  // deliberately wrong',
     )

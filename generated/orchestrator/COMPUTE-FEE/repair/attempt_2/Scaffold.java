@@ -172,7 +172,7 @@ public class Scaffold {
 
     static void computeFee(AccountRecord ar, WorkingStorage ws) {
         // PARAGRAPH:COMPUTE-FEE:BEGIN
-        throw new UnsupportedOperationException("COMPUTE-FEE not yet synthesized");
+switch (ar.getTier()) { case "A": ws.setRate(new java.math.BigDecimal("0.01500")); break; case "B": ws.setRate(new java.math.BigDecimal("0.01000")); break; default: ws.setRate(new java.math.BigDecimal("0.00500")); } ws.setFee(ar.getBalance().multiply(ws.getRate()).setScale(2, java.math.RoundingMode.DOWN));
         // PARAGRAPH:COMPUTE-FEE:END
     }
 }

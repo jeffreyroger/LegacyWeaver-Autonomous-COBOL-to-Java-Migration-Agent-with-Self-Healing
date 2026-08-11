@@ -1,11 +1,11 @@
 /*
- * Scaffold.java — GENERATED, do not hand-edit (Step K2).
+ * Scaffold.java â€” GENERATED, do not hand-edit (Step K2).
  *
- * Produced deterministically by weaver/agent/scaffold.py from
- * weaver.layout's field tables. Everything here is control flow, decoding,
- * and encoding implied by the declared byte offsets and edit masks — no
+ * Produced deterministically by weaver/agent/scaffold.py from a
+ * ScaffoldSpec's field tables. Everything here is control flow, decoding,
+ * and encoding implied by the declared byte offsets and edit masks â€” no
  * paragraph business logic. The one paragraph body that requires
- * interpretation (PROCESS-RECORD) is a stub between substitution markers;
+ * interpretation is a stub between substitution markers;
  * weaver/agent/assemble.py replaces it with a synthesized or hand-written
  * body without touching anything else in this file.
  */
@@ -181,15 +181,15 @@ public class Scaffold {
     static void processRecord(AccountRecord ar, WorkingStorage ws) {
         // PARAGRAPH:PROCESS-RECORD:BEGIN
 if (ar.isPremium()) {
-    ws.appliedRate = ar.rate.multiply(new BigDecimal("1.15"));
+    ws.appliedRate = ar.rate.multiply(new java.math.BigDecimal("1.15")).setScale(5, java.math.RoundingMode.DOWN);
 } else {
-    ws.appliedRate = ar.rate;
+    ws.appliedRate = ar.rate.setScale(5, java.math.RoundingMode.DOWN);
 }
 
 if (ar.isDormant()) {
-    ws.interest = BigDecimal.ZERO;
+    ws.interest = java.math.BigDecimal.ZERO.setScale(2);
 } else {
-    ws.interest = ar.balance.multiply(ws.appliedRate).divide(new BigDecimal("365"), RoundingMode.DOWN);
+    ws.interest = ar.balance.multiply(ws.appliedRate).divide(new java.math.BigDecimal("365"), 2, java.math.RoundingMode.DOWN);
 }
         // PARAGRAPH:PROCESS-RECORD:END
     }

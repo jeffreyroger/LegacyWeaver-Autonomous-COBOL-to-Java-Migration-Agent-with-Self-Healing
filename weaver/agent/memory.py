@@ -68,7 +68,7 @@ class FailureMemory:
     def __post_init__(self) -> None:
         self.store_path = Path(self.store_path)
         if self.store_path.exists():
-            raw = json.loads(self.store_path.read_text())
+            raw = json.loads(self.store_path.read_text(encoding="utf-8"))
             self.cases = [
                 MemoryCase(**{**c, "signature": SymptomSignature(**c["signature"])})
                 for c in raw
@@ -80,7 +80,7 @@ class FailureMemory:
             {**asdict(c), "signature": asdict(c.signature)}
             for c in self.cases
         ]
-        self.store_path.write_text(json.dumps(payload, indent=2))
+        self.store_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
     def query(self, signature: SymptomSignature) -> tuple[MemoryCase, float] | None:
         """Query before any inference. Returns the best match above

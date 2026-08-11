@@ -51,7 +51,7 @@ def _run_in_isolated_dir(command: list[str], work_dir: Path, input_path: Path,
         stderr = e.stderr or ""
 
     output_path = work_dir / output_filename
-    output_lines = output_path.read_text().splitlines() if output_path.exists() else None
+    output_lines = output_path.read_text(encoding="utf-8").splitlines() if output_path.exists() else None
 
     return ExecutionResult(exit_code, stdout, stderr, output_lines, timed_out)
 

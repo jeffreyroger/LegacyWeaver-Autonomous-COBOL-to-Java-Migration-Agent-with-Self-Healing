@@ -71,6 +71,6 @@ def segment(source: str) -> list[Paragraph]:
 if __name__ == "__main__":
     import sys
 
-    src = Path(sys.argv[1]).read_text()
+    src = Path(sys.argv[1]).read_text(encoding="utf-8")
     for p in segment(src):
         print(f"{p.identifier}: lines {p.start_line}-{p.end_line}")
