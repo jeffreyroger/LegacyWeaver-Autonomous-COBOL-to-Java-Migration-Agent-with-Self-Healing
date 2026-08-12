@@ -1,12 +1,12 @@
 /*
  * Scaffold.java — GENERATED, do not hand-edit (Step K2).
  *
- * Produced deterministically by weaver/agent/scaffold.py from a
+ * Produced deterministically by zuse/agent/scaffold.py from a
  * ScaffoldSpec's field tables. Everything here is control flow, decoding,
  * and encoding implied by the declared byte offsets and edit masks — no
  * paragraph business logic. The one paragraph body that requires
  * interpretation is a stub between substitution markers;
- * weaver/agent/assemble.py replaces it with a synthesized or hand-written
+ * zuse/agent/assemble.py replaces it with a synthesized or hand-written
  * body without touching anything else in this file.
  */
 

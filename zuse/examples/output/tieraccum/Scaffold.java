@@ -1,12 +1,12 @@
 /*
  * Scaffold.java — GENERATED, do not hand-edit (Step K2).
  *
- * Produced deterministically by weaver/agent/scaffold.py from a
+ * Produced deterministically by zuse/agent/scaffold.py from a
  * ScaffoldSpec's field tables. Everything here is control flow, decoding,
  * and encoding implied by the declared byte offsets and edit masks — no
  * paragraph business logic. The one paragraph body that requires
  * interpretation is a stub between substitution markers;
- * weaver/agent/assemble.py replaces it with a synthesized or hand-written
+ * zuse/agent/assemble.py replaces it with a synthesized or hand-written
  * body without touching anything else in this file.
  */
 
@@ -181,13 +181,11 @@ public class Scaffold {
 
     static void accumulateTiers(AccountRecord ar, WorkingStorage ws) {
         // PARAGRAPH:ACCUMULATE-TIERS:BEGIN
-ws.accum = java.math.BigDecimal.ZERO.setScale(2);
+ws.accum = java.math.BigDecimal.ZERO.setScale(2, java.math.RoundingMode.DOWN);
 for (int i = 1; i <= ar.units.intValue(); i++) {
-    ws.idx = new java.math.BigDecimal(i);
-    java.math.BigDecimal step = ar.base.multiply(new java.math.BigDecimal("0.10"))
-        .divide(ws.idx, 2, java.math.RoundingMode.DOWN);
-    ws.step = step;
-    ws.accum = ws.accum.add(step);
+    ws.idx = new java.math.BigDecimal(i).setScale(0, java.math.RoundingMode.DOWN);
+    ws.step = ar.base.multiply(new java.math.BigDecimal("0.10")).divide(ws.idx, 2, java.math.RoundingMode.DOWN);
+    ws.accum = ws.accum.add(ws.step).setScale(2, java.math.RoundingMode.DOWN);
 }
         // PARAGRAPH:ACCUMULATE-TIERS:END
     }
