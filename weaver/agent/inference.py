@@ -4,11 +4,17 @@ Talks to the local Ollama daemon on loopback only. All determinism-relevant
 parameters (model, seed, temperature, top_p, context window, prediction
 cap) are pinned and sent on every request — some runtimes ignore a seed set
 only at session level, so it is set per-call here (J2 common failure).
+
+CI exception (CLAUDE.md rule 10): GitHub-hosted runners have no local model
+runtime, so the `weaver` GitHub Action opts into `provider="groq"` via the
+WEAVER_INFERENCE_PROVIDER env var. This is the only caller permitted to do
+so -- local/CLI/backend/frontend runs default to "ollama" and stay offline.
 """
 
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -18,8 +24,10 @@ import requests
 from weaver.agent.cache import PromptCache
 
 OLLAMA_HOST = "http://127.0.0.1:11434"  # loopback only -- J1 offline requirement
+GROQ_HOST = "https://api.groq.com/openai/v1"
 DEFAULT_MODEL = "qwen2.5-coder:7b"
 FALLBACK_MODEL = "qwen2.5-coder:3b"
+GROQ_DEFAULT_MODEL = "qwen/qwen3-32b"
 SEED = 42
 TEMPERATURE = 0.0
 TOP_P = 1.0
@@ -76,10 +84,21 @@ class InferenceResponse:
 
 
 class InferenceClient:
-    """Cache-first client: identical requests never hit the model twice."""
+    """Cache-first client: identical requests never hit the model twice.
 
-    def __init__(self, cache_dir: Path, host: str = OLLAMA_HOST, replay_only: bool = False):
-        _assert_loopback(host)
+    `provider="ollama"` (default) is the only path used locally/CLI/backend/
+    frontend and keeps the loopback-only offline guarantee. `provider="groq"`
+    exists solely for the CI workflow (see module docstring) and is never
+    selected unless the caller explicitly opts in.
+    """
+
+    def __init__(self, cache_dir: Path, host: str = OLLAMA_HOST, replay_only: bool = False,
+                 provider: str = "ollama"):
+        if provider not in ("ollama", "groq"):
+            raise ValueError(f"unknown inference provider: {provider}")
+        self.provider = provider
+        if provider == "ollama":
+            _assert_loopback(host)
         self.host = host
         self.cache = PromptCache(cache_dir, replay_only=replay_only)
 
@@ -94,9 +113,12 @@ class InferenceClient:
                 from_cache=True,
             )
 
-        resp = requests.post(f"{self.host}/api/generate", json=payload, timeout=180)
-        resp.raise_for_status()
-        data = resp.json()
+        if self.provider == "groq":
+            data = self._generate_groq(request)
+        else:
+            resp = requests.post(f"{self.host}/api/generate", json=payload, timeout=180)
+            resp.raise_for_status()
+            data = resp.json()
         self.cache.put(payload, data)
         return InferenceResponse(
             text=data["response"],
@@ -104,6 +126,38 @@ class InferenceClient:
             eval_duration_ns=data.get("eval_duration", 0),
             from_cache=False,
         )
+
+    def _generate_groq(self, request: InferenceRequest) -> dict[str, Any]:
+        api_key = os.environ.get("GROQ_API_KEY")
+        if not api_key:
+            raise OfflineViolationError(
+                "provider=groq requires GROQ_API_KEY in the environment (CI-only path)"
+            )
+        body: dict[str, Any] = {
+            "model": request.model if request.model != DEFAULT_MODEL else GROQ_DEFAULT_MODEL,
+            "messages": [{"role": "user", "content": request.prompt}],
+            "seed": request.seed,
+            "temperature": TEMPERATURE,
+            "top_p": TOP_P,
+            "max_tokens": NUM_PREDICT,
+        }
+        if request.schema is not None:
+            body["response_format"] = {"type": "json_object"}
+        resp = requests.post(
+            f"{self.host}/chat/completions",
+            json=body,
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=180,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        choice = data["choices"][0]
+        usage = data.get("usage", {})
+        return {
+            "response": choice["message"]["content"],
+            "eval_count": usage.get("completion_tokens", 0),
+            "eval_duration": int(usage.get("completion_time", 0) * 1e9),
+        }
 
 
 if __name__ == "__main__":

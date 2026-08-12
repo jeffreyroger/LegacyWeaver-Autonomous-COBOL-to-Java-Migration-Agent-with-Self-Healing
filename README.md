@@ -220,6 +220,17 @@ See [walkthrough.md](walkthrough.md) for a full run-through of what's implemente
 | `generated/` | Run artifacts: model cache, failure memory, synthesized candidates |
 | `requirements.txt` | Dependency list (mirrors `pyproject.toml`); use for quick `pip install -r` setup |
 
+## Continuous migration (GitHub Actions)
+
+`.github/workflows/migrate.yml` runs `weaver migrate` on any `.cob`/`.cbl`
+file pushed under `input/`, and (per the orchestrator's own per-unit
+verification) commits the result to `output/` only if it verifies. GitHub
+runners have no local Ollama daemon, so this workflow is the one scoped
+exception to "offline by default" below: it sets `WEAVER_INFERENCE_PROVIDER=groq`
+and calls Groq's hosted API. **Before it will run, add a `GROQ_API_KEY` repo
+secret** (Settings → Secrets and variables → Actions → New repository
+secret). Local/CLI/backend/frontend usage is unaffected and stays offline.
+
 ## Design principles
 
 1. **The compiled binary is the spec.** Not a document, not a person's memory of what the code does — the actual execution behavior of the actual COBOL, on the actual input.

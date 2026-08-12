@@ -23,7 +23,7 @@ import uuid
 
 from weaver.agent.attribution import verify_unit
 from weaver.agent.escalation import DiagnosticRecord, build_diagnostic_record
-from weaver.agent.inference import InferenceClient
+from weaver.agent.inference import GROQ_HOST, InferenceClient
 from weaver.agent.memory import FailureMemory, MemoryCase, embed
 from weaver.agent.memory_repair import try_memory_repair
 from weaver.agent.repair_loop import repair_unit
@@ -80,10 +80,19 @@ class Orchestrator:
             self.trace_path.write_text("", encoding="utf-8")  # fresh trace per run
         else:
             self.trace_path.touch(exist_ok=True)  # resume: append, never truncate
-        self.client = InferenceClient(
-            cache_dir=Path("generated/model_cache"),
-            replay_only=self.spec.replay,
-        )
+        # CI-only override (CLAUDE.md rule 10 scoped exception): the
+        # GitHub Action sets WEAVER_INFERENCE_PROVIDER=groq because runners
+        # have no local Ollama daemon. Local/CLI/backend/frontend runs never
+        # set this and stay on the offline "ollama" default.
+        provider = os.environ.get("WEAVER_INFERENCE_PROVIDER", "ollama")
+        client_kwargs: dict = {
+            "cache_dir": Path("generated/model_cache"),
+            "replay_only": self.spec.replay,
+            "provider": provider,
+        }
+        if provider == "groq":
+            client_kwargs["host"] = GROQ_HOST
+        self.client = InferenceClient(**client_kwargs)
         self.memory = FailureMemory(self.spec.memory_store_path)
 
     def _emit(self, unit_id: str, node: str, action: str, duration: float,

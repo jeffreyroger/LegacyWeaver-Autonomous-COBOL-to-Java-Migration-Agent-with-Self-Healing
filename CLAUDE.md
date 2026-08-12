@@ -149,6 +149,16 @@ harness, not as a replacement for it.
 10. **Offline and credential-free, always (DC-1, NFR-8, NFR-10).** No network
     call, no API key, no account, at any point in a verification run.
 
+    **Scoped CI exception (2026-08-12):** local, CLI, backend, and frontend
+    runs remain fully offline exactly as above — the default inference
+    provider is local Ollama and this is unchanged. The `.github/workflows/`
+    GitHub Action that auto-migrates files pushed to `input/` is the sole
+    exception: GitHub-hosted runners have no local model runtime, so that
+    workflow only sets `WEAVER_INFERENCE_PROVIDER=groq` and calls Groq's
+    hosted API with a `GROQ_API_KEY` repo secret (see
+    `weaver/agent/inference.py`'s `provider="groq"` path). Nothing else may
+    read this env var or relax the offline default.
+
 11. **Baseline defects are declared, not hidden (FR-8).** Any change to
     `baseline/Baseline.java` must keep its header comment accurate — it must
     enumerate every deviation the file actually contains, no more, no less.
