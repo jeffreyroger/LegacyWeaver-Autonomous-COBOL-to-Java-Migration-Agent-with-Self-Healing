@@ -7,7 +7,7 @@
       * and zone. Truncates toward zero (no ROUNDED, T1); no signed or
       * trailing-separate field, matching the single-shape class this
       * program belongs to.
-      * Retrigger: CI migration re-run after Groq max_tokens fix.
+      * Retrigger: CI migration re-run after Groq max_tokens + scaffold fix.
       *****************************************************************
        IDENTIFICATION DIVISION.
        PROGRAM-ID. HANDLFEE.
