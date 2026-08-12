@@ -227,20 +227,16 @@ def test_prompt_prohibition_text_is_pinned():
     that renders the prohibition differently silently invalidates every
     cached model response for that program. This pins the rendering.
 
-    Note for reviewers: the S1 generalization changed this line from
-    "ws.appliedRate and ws.interest" (hand-written, pre-2026-08-12) to
-    "ws.appliedRate, ws.interest" — a comma, not a conjunction. That is a
-    real change to a hashed input, made incidentally rather than
-    deliberately. It is pinned here as-is rather than reverted, because
-    reverting is also a cache-affecting change and the choice belongs to
-    whoever owns the demo cache.
+    The S1 generalization had incidentally changed this line's conjunction
+    to a comma via a plain ", ".join. Restored, since no cached response
+    depended on either form (verified by replay), and pinned here.
     """
     from weaver.agent.prompt import _prohibitions
 
     text = _prohibitions(to_scaffold_spec(load_program(INTEREST)))
     assert "- write to ws.totalInterest -- the generated main loop owns that\n" in text
     assert (
-        "  accumulation; this paragraph only sets ws.appliedRate, ws.interest\n" in text
+        "  accumulation; this paragraph only sets ws.appliedRate and ws.interest\n" in text
     )
 
 
