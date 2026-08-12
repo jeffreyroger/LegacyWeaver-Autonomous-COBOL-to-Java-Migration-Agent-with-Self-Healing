@@ -11,6 +11,7 @@
       * only new thing under test (Step U4).
       * Retrigger: with Groq 429 retry/backoff now in inference.py.
       * Retrigger: provider failures no longer crash the migrate run.
+      * Retrigger: repair loop now gets a field table (ar.weight, not ar.weight()).
       *****************************************************************
        IDENTIFICATION DIVISION.
        PROGRAM-ID. SHIPCOST.
