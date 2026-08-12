@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
+import tempfile
 import threading
 import time
 import uuid
@@ -19,6 +21,7 @@ from pathlib import Path
 from weaver.agent.attribution import verify_unit
 from weaver.agent.memory import MemoryCase, embed
 from weaver.agent.metrics import compute_metrics
+from weaver.atomic_json import write_json_atomic
 from weaver.agent.orchestrator import Orchestrator, UnitResult
 from weaver.agent.program_profiles import program_profile
 from weaver.agent.runspec import RunSpec
@@ -287,9 +290,8 @@ class RunManager:
             raise InvalidRequestError(f"unknown decision: {decision!r}")
 
         record.escalation_decisions[unit_id] = outcome
-        (record.run_dir / "escalation_decisions.json").write_text(
-            json.dumps(record.escalation_decisions, indent=2), encoding="utf-8"
-        )
+        write_json_atomic(record.run_dir / "escalation_decisions.json",
+                            record.escalation_decisions)
         return outcome
 
     def _write_back_escalation(self, record: RunRecord, unit: UnitResult, verified_body: str) -> None:
@@ -370,15 +372,15 @@ class RunManager:
     # -- B7: checkpoint / resume --------------------------------------------
 
     def _write_params(self, record: RunRecord, resolved_spec: dict | None) -> None:
-        record.params_path.write_text(json.dumps({
+        write_json_atomic(record.params_path, {
             "request": record.request.model_dump(), "resolved_spec": resolved_spec,
-        }, indent=2), encoding="utf-8")
+        })
 
     def _write_lifecycle(self, record: RunRecord) -> None:
-        record.lifecycle_path.write_text(json.dumps({
+        write_json_atomic(record.lifecycle_path, {
             "run_id": record.run_id, "lifecycle": record.lifecycle, "error": record.error,
             "created_at": record.created_at,
-        }, indent=2), encoding="utf-8")
+        })
 
     def _scan_for_interrupted_runs(self) -> None:
         """On startup, any run left RUNNING with no live process is
@@ -392,7 +394,7 @@ class RunManager:
             data = json.loads(lifecycle_path.read_text(encoding="utf-8"))
             if data.get("lifecycle") == "RUNNING":
                 data["lifecycle"] = "INTERRUPTED"
-                lifecycle_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+                write_json_atomic(lifecycle_path, data)
 
     def resume_run(self, run_id: str) -> RunRecord:
         """Reload an INTERRUPTED run's state and continue from the first

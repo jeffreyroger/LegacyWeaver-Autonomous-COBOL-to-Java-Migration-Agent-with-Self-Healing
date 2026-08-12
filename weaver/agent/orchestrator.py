@@ -11,6 +11,8 @@ instruction) -- continues to the next unit and reports partial progress.
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import threading
 import time
 from collections.abc import Callable
@@ -31,6 +33,7 @@ from weaver.agent.segment import Paragraph, segment
 from weaver.agent.signature import build_signature
 from weaver.agent.synthesize import SynthesisResult, synthesize_paragraph
 from weaver.agent.validate import SynthesizedBody
+from weaver.atomic_json import write_json_atomic
 from weaver.report import Report
 
 STATE_PATH = Path("generated/orchestrator_state.json")
@@ -278,7 +281,9 @@ class Orchestrator:
         for unit_id, r in self.results.items():
             d = asdict(r)
             payload[unit_id] = d
-        self.state_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+        # Atomic: the backend serves GET /runs/{id} from this file while the
+        # run is still executing (see weaver/atomic_json.py).
+        write_json_atomic(self.state_path, payload)
 
 
 if __name__ == "__main__":

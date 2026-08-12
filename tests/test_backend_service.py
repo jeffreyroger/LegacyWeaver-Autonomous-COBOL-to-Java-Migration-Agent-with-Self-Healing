@@ -21,6 +21,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import backend.app as app_module
+from weaver.atomic_json import write_json_atomic
 import backend.runs as runs_module
 from backend.app import app
 from backend.runs import RunManager
@@ -69,8 +70,10 @@ class FakeOrchestrator:
 
     def _persist_state(self):
         from dataclasses import asdict
-        self.state_path.parent.mkdir(parents=True, exist_ok=True)
-        self.state_path.write_text(json.dumps({k: asdict(v) for k, v in self.results.items()}, default=str))
+        # Atomic, like the real Orchestrator: a non-atomic write here is
+        # read mid-write by GET /runs/{id} and fails to parse (this is what
+        # made this suite flaky before 2026-08-12).
+        write_json_atomic(self.state_path, {k: asdict(v) for k, v in self.results.items()})
 
 
 @pytest.fixture(autouse=True)
@@ -82,7 +85,27 @@ def _patch_orchestrator(monkeypatch, tmp_path):
     # present (see module docstring). The toolchain gate itself (added for
     # the OI-3 version-detection fix) is exercised separately below.
     monkeypatch.setattr(app_module, "_check_toolchain", lambda: (True, "ok"))
+
+    # Each test gets its own RunManager. `backend.app.run_manager` is a
+    # process-wide singleton that (a) serialises every run behind
+    # `_active_lock` and (b) accumulates records in `_runs` forever. Shared
+    # across tests that both start background threads, it produced two
+    # distinct flakes: a run still holding the lock from an earlier test
+    # made a later test's `_wait_terminal` time out (which test lost the
+    # race varied run to run), and `GET /runs` saw other tests' records.
+    # Constructed after RUNS_ROOT is patched -- __init__ scans it.
+    manager = runs_module.RunManager()
+    monkeypatch.setattr(app_module, "run_manager", manager)
+
     yield
+
+    # Never leave a worker running into the next test: it would take
+    # `_active_lock` on a manager that test is not expecting to be busy.
+    for record in list(manager._runs.values()):
+        thread = getattr(record, "thread", None)
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=10)
+            assert not thread.is_alive(), f"run {record.run_id} did not finish"
 
 
 @pytest.fixture
@@ -97,7 +120,10 @@ def _wait_terminal(client, run_id, timeout=5.0):
         if state["lifecycle"] in {"COMPLETED", "PARTIAL", "FAILED", "CANCELLED"}:
             return state
         time.sleep(0.02)
-    raise TimeoutError("run did not reach a terminal state")
+    raise TimeoutError(
+        f"run {run_id} did not reach a terminal state within {timeout}s "
+        f"(last lifecycle: {state.get('lifecycle')!r})"
+    )
 
 
 def _create_payload(**overrides):
