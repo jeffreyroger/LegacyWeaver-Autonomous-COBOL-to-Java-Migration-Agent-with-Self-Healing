@@ -31,3 +31,9 @@ Thumbs.db
 *.class
 **/build/
 
+# Frontend (Vite + React) -- built into backend/static by `npm run build`
+frontend/node_modules/
+frontend/dist/
+backend/static/*
+!backend/static/.gitkeep
+

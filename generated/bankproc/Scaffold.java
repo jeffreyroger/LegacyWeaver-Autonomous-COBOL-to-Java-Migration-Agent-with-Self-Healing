@@ -45,87 +45,87 @@ final class CobolEdit {
 
         return new String(out) + "." + fracDigits;
     }
+
+    /** Encode value as a COBOL PIC 9(n)-style plain zero-padded unsigned
+     * field -- no sign column, no decimal point. Added 2026-08-12 to close
+     * the gap tieraccum_layout.py originally worked around by dropping the
+     * field instead (floatingSign always reserved a sign byte and always
+     * emitted a decimal point, neither of which a plain PIC 9(n) has). */
+    static String zeroPadded(java.math.BigDecimal value, int width) {
+        String digits = value.setScale(0, java.math.RoundingMode.UNNECESSARY).toBigInteger().toString();
+        while (digits.length() < width) {
+            digits = "0" + digits;
+        }
+        return digits;
+    }
 }
 
 final class AccountRecord {
-    final String id;
-    final java.math.BigDecimal balance;
-    final java.math.BigDecimal rate;
+    final String accountId;
     final String type;
-    final String flags;
+    final java.math.BigDecimal amount;
 
-    AccountRecord(String id, java.math.BigDecimal balance, java.math.BigDecimal rate, String type, String flags) {
-        this.id = id;
-        this.balance = balance;
-        this.rate = rate;
+    AccountRecord(String accountId, String type, java.math.BigDecimal amount) {
+        this.accountId = accountId;
         this.type = type;
-        this.flags = flags;
+        this.amount = amount;
     }
 
     static AccountRecord decode(String line) {
         return new AccountRecord(
-                line.substring(0, 16),
-                Scaffold.decodeSignedTrailing(line.substring(16, 27), line.charAt(27), 2),
-                Scaffold.decodeUnsigned(line.substring(28, 34), 5),
-                line.substring(34, 35),
-                line.substring(35, 39)
+                line.substring(0, 10),
+                line.substring(10, 11),
+                Scaffold.decodeUnsigned(line.substring(11, 20), 2)
         );
     }
 
-    String dormant() { return flags.substring(0, 1); }
-    String hold() { return flags.substring(1, 2); }
 
-    boolean isPremium() { return type.equals("P"); }
-    boolean isDormant() { return dormant().equals("Y"); }
-    boolean isHold() { return hold().equals("Y"); }
+
+    boolean isDeposit() { return type.equals("D"); }
 }
 
 final class ReportLine {
-    final String id;
+    final String account;
     final String type;
+    final java.math.BigDecimal amount;
     final java.math.BigDecimal balance;
-    final java.math.BigDecimal interest;
-    final String dormant;
 
-    ReportLine(String id, String type, java.math.BigDecimal balance, java.math.BigDecimal interest, String dormant) {
-        this.id = id;
+    ReportLine(String account, String type, java.math.BigDecimal amount, java.math.BigDecimal balance) {
+        this.account = account;
         this.type = type;
+        this.amount = amount;
         this.balance = balance;
-        this.interest = interest;
-        this.dormant = dormant;
     }
 
     String encode() {
-        return Scaffold.pad(id, 16) + Scaffold.pad(type, 1) + CobolEdit.floatingSign(balance, 13, 2) + CobolEdit.floatingSign(interest, 11, 2) + Scaffold.pad(dormant, 1);
+        return Scaffold.pad(account, 10) + Scaffold.pad(type, 1) + CobolEdit.floatingSign(amount, 11, 2) + CobolEdit.floatingSign(balance, 13, 2);
     }
 }
 
 final class TotalsLine {
     final String label;
     final java.math.BigDecimal total;
-    final String filler;
 
-    TotalsLine(String label, java.math.BigDecimal total, String filler) {
+    TotalsLine(String label, java.math.BigDecimal total) {
         this.label = label;
         this.total = total;
-        this.filler = filler;
     }
 
     String encode() {
-        return Scaffold.pad(label, 30) + CobolEdit.floatingSign(total, 11, 2) + Scaffold.pad(filler, 1);
+        return Scaffold.pad(label, 20) + CobolEdit.floatingSign(total, 13, 2);
     }
 }
 
 final class WorkingStorage {
-    java.math.BigDecimal appliedRate = java.math.BigDecimal.ZERO.setScale(5);
-    java.math.BigDecimal interest = java.math.BigDecimal.ZERO.setScale(2);
-    java.math.BigDecimal totalInterest = java.math.BigDecimal.ZERO.setScale(2);
+    java.math.BigDecimal balance = java.math.BigDecimal.ZERO.setScale(2);
+    java.math.BigDecimal amount = java.math.BigDecimal.ZERO.setScale(2);
+    java.math.BigDecimal totalProcessed = java.math.BigDecimal.ZERO.setScale(2);
 }
 
 public class Scaffold {
-    private static final String INPUT_FILE = "accounts.dat";
-    private static final String OUTPUT_FILE = "interest.out";
-    private static final int RECORD_WIDTH = 39;
+    private static final String INPUT_FILE = "transactions.dat";
+    private static final String OUTPUT_FILE = "bankproc.out";
+    private static final int RECORD_WIDTH = 20;
 
     static java.math.BigDecimal decodeUnsigned(String digits, int scale) {
         java.math.BigDecimal unscaled = new java.math.BigDecimal(new java.math.BigInteger(digits));
@@ -163,24 +163,24 @@ public class Scaffold {
             }
             String line = String.format("%-" + RECORD_WIDTH + "s", rawLine);
             AccountRecord ar = AccountRecord.decode(line);
-            processRecord(ar, ws);
-            ws.totalInterest = ws.totalInterest.add(ws.interest);
+            processTransaction(ar, ws);
+            ws.totalProcessed = ws.totalProcessed.add(ws.amount);
 
-            ReportLine rl = new ReportLine(ar.id, ar.type, ar.balance, ws.interest, ar.dormant());
+            ReportLine rl = new ReportLine(ar.accountId, ar.type, ws.amount, ws.balance);
             // GnuCOBOL LINE SEQUENTIAL strips trailing spaces on WRITE.
             out.append(rstripSpaces(rl.encode())).append("\n");
         }
 
-        TotalsLine tl = new TotalsLine(Scaffold.pad("TOTAL INTEREST:", 30), ws.totalInterest, " ");
+        TotalsLine tl = new TotalsLine(Scaffold.pad("TOTAL PROCESSED:", 20), ws.totalProcessed);
         out.append(rstripSpaces(tl.encode())).append("\n");
 
         java.nio.file.Files.write(java.nio.file.Paths.get(OUTPUT_FILE),
             out.toString().getBytes(java.nio.charset.StandardCharsets.US_ASCII));
     }
 
-    static void processRecord(AccountRecord ar, WorkingStorage ws) {
-        // PARAGRAPH:PROCESS-RECORD:BEGIN
-this is not valid java {{{
-        // PARAGRAPH:PROCESS-RECORD:END
+    static void processTransaction(AccountRecord ar, WorkingStorage ws) {
+        // PARAGRAPH:PROCESS-TRANSACTION:BEGIN
+        throw new UnsupportedOperationException("PROCESS-TRANSACTION not yet synthesized");
+        // PARAGRAPH:PROCESS-TRANSACTION:END
     }
 }

@@ -77,6 +77,18 @@ _PROGRAM_PATHS: dict[str, ProgramPaths] = {
         Path("fixtures/data_shipcost"),
     ),
     # interest.cob is deliberately absent: its paths are RunSpec's defaults.
+    "asdf.cob": ProgramPaths(
+        Path("generated/whseproc/Scaffold.java"),
+        Path("fixtures/data_whseproc/expected/golden_whseproc.out"),
+        Path("reference_whseproc"),
+        Path("fixtures/data_whseproc"),
+    ),
+    "test3.cob": ProgramPaths(
+        Path("generated/bankproc/Scaffold.java"),
+        Path("fixtures/data_bankproc/expected/golden_bankproc.out"),
+        Path("reference_bankproc"),
+        Path("fixtures/data_bankproc"),
+    ),
 }
 
 
