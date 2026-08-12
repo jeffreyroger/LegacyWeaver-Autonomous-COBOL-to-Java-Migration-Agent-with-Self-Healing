@@ -13,7 +13,7 @@ from pathlib import Path
 
 from weaver.agent.assemble import assemble
 from weaver.agent.data_context import build_context
-from weaver.agent.inference import InferenceClient, InferenceRequest
+from weaver.agent.inference import InferenceClient, InferenceError, InferenceRequest
 from weaver.agent.prompt import SYNTHESIS_SCHEMA, build_synthesis_prompt
 from weaver.agent.runspec import RunSpec
 from weaver.agent.scaffold import java_signature as scaffold_java_signature
@@ -59,7 +59,17 @@ def synthesize_paragraph(paragraph: Paragraph, client: InferenceClient, *, spec:
         this_prompt = prompt if attempt == 1 else (
             f"{prompt}\n\nYour previous answer was rejected: {last_error}. {regeneration_hint(last_error)}"
         )
-        response = client.generate(InferenceRequest(prompt=this_prompt, schema=SYNTHESIS_SCHEMA))
+        try:
+            response = client.generate(InferenceRequest(prompt=this_prompt, schema=SYNTHESIS_SCHEMA))
+        except InferenceError as e:
+            # The provider itself failed to produce a usable completion
+            # (rate limit exhausted after retry, unparseable output, ...) --
+            # treat exactly like a rejected response so it counts against
+            # MAX_REGENERATE_ATTEMPTS and falls through to a normal
+            # synthesis_failure/escalation instead of crashing the run.
+            raw_responses.append(str(e))
+            last_error = ValidationError("inference request failed", str(e))
+            continue
         raw_responses.append(response.text)
         try:
             body = parse_response(response.text)

@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from weaver.agent.attribution import AttributionResult, verify_unit
-from weaver.agent.inference import InferenceClient, InferenceRequest
+from weaver.agent.inference import InferenceClient, InferenceError, InferenceRequest
 from weaver.agent.prompt import SYNTHESIS_SCHEMA
 from weaver.agent.repair_deterministic import try_deterministic_repair
 from weaver.agent.repair_model import RepairAttempt, build_repair_prompt
@@ -114,7 +114,14 @@ def repair_unit(
                 classification if best_result.compiled else None,
                 failing_div, attempts, spec.scaffold_spec,
             )
-            response = client.generate(InferenceRequest(prompt=prompt, schema=SYNTHESIS_SCHEMA))
+            try:
+                response = client.generate(InferenceRequest(prompt=prompt, schema=SYNTHESIS_SCHEMA))
+            except InferenceError as e:
+                # The provider itself failed (rate limit exhausted after
+                # retry, unparseable completion, ...) -- an attempt failure
+                # like any other, not a reason to crash the whole run.
+                attempts.append(RepairAttempt(attempt_number, best_body, f"inference request failed: {e}"))
+                continue
             try:
                 parsed = parse_response(response.text)
                 # Change 1: same mechanical qualification fix as M2.

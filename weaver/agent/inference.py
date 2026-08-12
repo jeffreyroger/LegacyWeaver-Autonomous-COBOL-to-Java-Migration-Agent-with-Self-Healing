@@ -69,6 +69,17 @@ class OfflineViolationError(RuntimeError):
     pass
 
 
+class InferenceError(RuntimeError):
+    """A provider request failed to produce usable output (rate limit
+    exhausted, malformed/unparseable completion, transport error, ...).
+
+    Distinct from OfflineViolationError (a programming-error guard) so
+    callers can treat it the same way they already treat a parsed-but-
+    invalid response: log it, regenerate, and eventually escalate that one
+    unit -- never let a single flaky request crash the whole migrate run.
+    """
+
+
 def _assert_loopback(host: str) -> None:
     if "127.0.0.1" not in host and "localhost" not in host:
         raise OfflineViolationError(f"refusing to call non-loopback host: {host}")
@@ -195,7 +206,7 @@ class InferenceClient:
                 break
             time.sleep(_groq_retry_delay(resp) + 0.5)
         if not resp.ok:
-            raise RuntimeError(f"Groq request failed ({resp.status_code}): {resp.text}")
+            raise InferenceError(f"Groq request failed ({resp.status_code}): {resp.text}")
         data = resp.json()
         choice = data["choices"][0]
         usage = data.get("usage", {})
