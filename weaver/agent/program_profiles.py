@@ -83,6 +83,11 @@ _PROGRAM_PATHS: dict[str, ProgramPaths] = {
         Path("fixtures/data_handlfee"),
     ),
     # interest.cob is deliberately absent: its paths are RunSpec's defaults.
+    # asdf.cob/test3.cob are the original (badly-named) WHSEPROC/BANKPROC
+    # fixtures under fixtures/cobol/; whseproc.cob/bankproc.cob are the same
+    # programs promoted into input/ under their real names (2026-08-12) for
+    # Vite/CI use. Both keys point at the same artefacts -- one program, two
+    # filenames it's known by in this repo.
     "asdf.cob": ProgramPaths(
         Path("generated/whseproc/Scaffold.java"),
         Path("fixtures/data_whseproc/expected/golden_whseproc.out"),
@@ -90,6 +95,18 @@ _PROGRAM_PATHS: dict[str, ProgramPaths] = {
         Path("fixtures/data_whseproc"),
     ),
     "test3.cob": ProgramPaths(
+        Path("generated/bankproc/Scaffold.java"),
+        Path("fixtures/data_bankproc/expected/golden_bankproc.out"),
+        Path("reference_bankproc"),
+        Path("fixtures/data_bankproc"),
+    ),
+    "whseproc.cob": ProgramPaths(
+        Path("generated/whseproc/Scaffold.java"),
+        Path("fixtures/data_whseproc/expected/golden_whseproc.out"),
+        Path("reference_whseproc"),
+        Path("fixtures/data_whseproc"),
+    ),
+    "bankproc.cob": ProgramPaths(
         Path("generated/bankproc/Scaffold.java"),
         Path("fixtures/data_bankproc/expected/golden_bankproc.out"),
         Path("reference_bankproc"),
