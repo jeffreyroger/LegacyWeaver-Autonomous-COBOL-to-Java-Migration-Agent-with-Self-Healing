@@ -1,0 +1,9 @@
+{
+  "unit_id": "feecalc",
+  "total_records": 31,
+  "divergence_count": 0,
+  "exit_codes_match": true,
+  "verified": true,
+  "divergence_list_capped": false,
+  "divergences": []
+}
