@@ -37,6 +37,18 @@ generated/*
 !generated/o3_case_b_body.java
 !generated/o3_case_c_body.java
 !generated/o3_case_d_body.java
+!generated/taxcalc/
+generated/taxcalc/*
+!generated/taxcalc/Scaffold.java
+!generated/tieraccum/
+generated/tieraccum/*
+!generated/tieraccum/Scaffold.java
+!generated/compound/
+generated/compound/*
+!generated/compound/Scaffold.java
+!generated/shipcost/
+generated/shipcost/*
+!generated/shipcost/Scaffold.java
 
 # Claude Code worktrees must never be committed as gitlinks (see git history 788956d)
 .claude/worktrees/
