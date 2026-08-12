@@ -199,6 +199,8 @@ Known gaps, tracked rather than hidden (CLAUDE.md rule 12 — scope stays disclo
 - `weaver replay <run_id>` as a standalone command (FR-8.4) — not implemented; the `--replay` *flag* on `migrate` works today
 - `weaver memory list | export | import` (§3.9.1) — not implemented; `FailureMemory` exists internally with no CLI surface
 - Sandboxed execution of generated code (§3.9.3 / NFR-S1) — generated Java currently compiles and runs on the host, not inside a `--network=none --read-only` container
+- COBOL frontend scope (Phase V) — `weaver/cobol/` derives layouts, condition names, working-storage tables, file names and main-loop wiring from source, replacing the hand-written per-program tables. It **raises rather than guesses** outside its declared scope: one input and one output file, DISPLAY usage only, no `OCCURS` / `RENAMES` / `COPY REPLACING`, exactly one synthesis unit per program
+- `tieraccum` / `compound` scaffolds gain unused WorkingStorage fields under the frontend — it emits every numeric WORKING-STORAGE item, where the hand-written specs omitted scratch variables their reference bodies express as Java locals. Additive, not a behaviour change; regenerating those two scaffolds changes their prompt hashes
 
 See [walkthrough.md](walkthrough.md) for a full run-through of what's implemented today, end to end.
 
@@ -209,6 +211,7 @@ See [walkthrough.md](walkthrough.md) for a full run-through of what's implemente
 | `fixtures/` | COBOL oracle source, copybooks, generated input, golden output |
 | `baseline/` | Deliberately unconstrained Java translation (control arm) |
 | `weaver/` | The verification harness (execution, comparison, classification, CLI) |
+| `weaver/cobol/` | COBOL frontend: PICTURE parser, DATA DIVISION reader, program model (layouts, condition names, main-loop wiring) |
 | `weaver/agent/` | Agent layer: local inference, deterministic scaffold, synthesis, repair loop, failure memory, orchestrator, escalation |
 | `backend/` | Local, loopback-only HTTP service exposing agent run lifecycle and trace events to a browser (no domain logic — see [docs/specs/BACKEND_PLAN.md](docs/specs/BACKEND_PLAN.md)) |
 | `tests/` | Unit tests for the harness, agent layer, and backend |

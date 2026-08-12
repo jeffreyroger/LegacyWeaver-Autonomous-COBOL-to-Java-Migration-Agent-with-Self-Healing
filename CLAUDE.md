@@ -116,9 +116,35 @@ harness, not as a replacement for it.
    arithmetic and invalidates the golden output (SRS §2.4, runbook Step A1).
    Verify the version before trusting any COBOL-derived result.
 
-9. **Layouts are data, not code (NFR-14).** Field tables live in
-   `weaver/layout.py`. Comparison and classification code must not hardcode
-   offsets — a second fixture must require no code change to those modules.
+9. **Layouts are data, not code (NFR-14).** Comparison and classification
+   code must not hardcode offsets — a second fixture must require no code
+   change to those modules.
+
+   **As of Phase V (2026-08-12) layouts are *derived* data.**
+   `weaver/cobol/` parses the DATA DIVISION and produces the field tables,
+   condition names, working-storage tables, file names and main-loop
+   wiring that `weaver/layout.py` and the six `*_layout.py` / `*_spec.py`
+   pairs previously declared by hand. Binding consequences:
+
+   - Parsing happens **once, upstream, in `weaver/cobol/`, and emits data.**
+     `weaver/agent/scaffold.py` must keep reading only a `ScaffoldSpec` and
+     never COBOL source text (AGENT_LAYER_PLAN.md K2).
+   - The hand-written tables are retained as the parser's **regression
+     oracle**, asserted equal across all six fixtures in
+     `tests/test_cobol_frontend.py`. Do not delete them to "remove
+     duplication" — they are the only independent check that the parser is
+     right, and the reason the load-bearing numbers are unchanged by
+     construction rather than by re-measurement.
+   - `weaver/agent/program_profiles.py` declares **artefact locations only**
+     (where a golden output or reference body lives). Anything that is a
+     fact about the COBOL — layouts, output filename, `ScaffoldSpec`,
+     paragraph id — must be derived, never re-declared there.
+   - A program that is present but outside the frontend's declared scope
+     **raises**. Never restore a `None`/fallback path: it resolves to
+     interest.cob's layouts and produces a confident wrong answer.
+   - The synthesis prompt is hashed into the model cache key (Step J4), so
+     text derived from the parsed program is cache-affecting.
+     `tests/test_cobol_frontend.py` pins the rendering.
 
 10. **Offline and credential-free, always (DC-1, NFR-8, NFR-10).** No network
     call, no API key, no account, at any point in a verification run.

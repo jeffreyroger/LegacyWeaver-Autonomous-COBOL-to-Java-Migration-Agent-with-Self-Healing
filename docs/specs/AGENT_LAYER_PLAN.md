@@ -620,6 +620,103 @@ S1's ScaffoldSpec generalization already provides.
 
 ---
 
+---
+
+## Phase V — COBOL Frontend (added 2026-08-12, post-U)
+
+**Why this is a new phase.** It is not in the original plan, and
+`docs/specs/scaffold_spec.md` explicitly placed a general-purpose COBOL
+parser out of scope — correctly, since J–T never asked for one. Phase U
+("Fixture Breadth") then took the fixture count from two to six, and with it
+the hand-written tables: six `*_layout.py` + `*_spec.py` pairs and a
+per-program entry in `program_profiles.py`. At that point "migrate a COBOL
+program" meant "migrate one of the six someone already hand-tabulated", and
+the marginal cost of a seventh was two more modules.
+
+**Relationship to K2.** K2 says *"Generate from the parsed field table —
+never from the COBOL source text."* That binds the scaffold generator and
+already presumes a table that came from parsing; Phase V is what produces it.
+The invariant: **parsing happens once, upstream, in `weaver/cobol/`, and
+emits data.** `weaver/agent/scaffold.py` still consumes only a `ScaffoldSpec`.
+
+**The hand-written tables are kept** as the parser's regression oracle, not
+as the live source of truth — they are the only independent check that the
+parser is right.
+
+### Step V1 — The PICTURE parser **[MUST]**
+
+Expand repetition, then split into storage pictures (where `V` is an implied
+decimal of zero stored bytes and a separate sign clause adds one) and
+numeric-edited pictures (where every symbol, including each floating-sign
+position and the point, is one print position). Raise on anything outside
+the vocabulary.
+
+**Acceptance test.** Every picture in all six fixtures. Independently:
+`-(9)9.99` computes to **13** — the value hand-derivation got wrong at Step
+B4/B5.
+
+### Step V2 — DATA DIVISION reader **[MUST]**
+
+Parse statements rather than lines; expand `COPY`; build the level tree;
+assign offsets, where an overlay starts at its target's offset and advances
+no cursor. Flatten: elementary items; a group only when something REDEFINES
+it; the overlay's children carrying `redefines=<target>`; never `FILLER`.
+
+**Acceptance test.** Derived tables equal all six hand-written layout
+modules **field for field, offsets included**.
+
+### Step V3 — Program surface **[MUST]**
+
+File direction from `OPEN INPUT`/`OPEN OUTPUT`, not `FILE-CONTROL` order.
+Driving paragraph is the first; the synthesis unit follows it.
+
+### Step V4 — Main-loop wiring **[MUST]**
+
+`report_ctor_map`, `totals_ctor_map` and the accumulator from `MOVE x TO
+<output field>` and `ADD x TO y`. Data plumbing only — the arithmetic is
+never inspected and stays the synthesis unit's job. The accumulator is
+identified by **what the totals line reports**, not by counting ADDs: a unit
+paragraph may contain an inner-loop `ADD` that is not the running total
+(`tieraccum.cob` does).
+
+**Acceptance test.** Derived `ScaffoldSpec` equals the hand-written one for
+`feecalc`, `taxcalc`, `shipcost`; equals it except `ws_fields` for
+`tieraccum` and `compound` (see below).
+
+### Step V5 — Derive the program profile **[MUST]** — *blocking gate*
+
+`program_profiles.py` stops importing a hand-written pair per program.
+Layouts, output filename, `ScaffoldSpec` and `reference_paragraph_id` are
+parsed; only **artefact locations** stay declared, because where this repo
+keeps a golden output is not a fact about the COBOL. An unknown program now
+resolves correct layouts, so `weaver verify` works on it with no code change;
+only `weaver migrate` needs a paths entry.
+
+A program that is present but unparseable **raises**. The previous `None`
+meant "fall back to interest.cob's layouts", i.e. slice another program's
+output with the wrong field boundaries — a confident wrong answer.
+
+**Acceptance test.** Full suite green; every derived path and output filename
+equal to the values `program_profiles.py` previously declared.
+
+### Known deliberate difference
+
+`tieraccum` and `compound` declare WORKING-STORAGE scratch items (`WS-IDX`,
+`WS-STEP`, `WS-STEP1..4`) that their hand-written specs omit, because their
+reference bodies express them as Java locals. The parser cannot know that
+intent and emits every numeric WORKING-STORAGE item — the source-faithful
+reading, which also gives the model each item's declared scale. Reference
+bodies still compile (unused fields are legal), so the difference is
+additive. **Consequence:** regenerating those two scaffolds adds unused
+fields and changes those two programs' prompt hashes.
+
+### Hard gate
+
+| Gate | Condition | If it fails |
+|---|---|---|
+| **V5** | Derived layouts/specs/paths equal the hand-written ones across all six fixtures | The parser is not equivalent to the tables it replaces |
+
+
 ## Phase T — Demo Preparation (Aug 11 night, 2 h)
 
 ### Step T1 — Freeze **[MUST]**
@@ -664,6 +761,7 @@ Stop and fix rather than proceeding:
 | **N1** | Divergences attribute to the correct unit | The repair loop cannot know what to fix |
 | **N4** | Loop terminates and reverts regressions | The loop will oscillate on stage |
 | **T2** | Replay reproduces the demo exactly | You have no fallback |
+| **V5** | Derived layouts/specs/paths equal the hand-written ones across all six fixtures | The parser is not equivalent to the tables it replaces |
 
 ## Cut Order
 

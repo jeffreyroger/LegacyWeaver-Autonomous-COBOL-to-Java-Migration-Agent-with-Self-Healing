@@ -7,10 +7,18 @@ against `weaver/layout.py` (INPUT_LAYOUT, REPORT_LAYOUT, TOTALS_LAYOUT) and
 **Scope note.** This spec describes the shape generated for the INTEREST
 fixture (and, in Phase S, FEECALC — a second program sharing the same
 generation rules but its own field table). It is driven by the field table,
-not by parsing arbitrary COBOL; building a general-purpose COBOL-to-scaffold
-compiler is out of scope for this plan (`AGENT_LAYER_PLAN.md` does not ask
-for one — it asks for a scaffold generated *from the field table* for the
-program(s) actually in the fixture set).
+not by parsing arbitrary COBOL.
+
+**Amended 2026-08-12 (Phase V).** This note previously read that building a
+general-purpose COBOL-to-scaffold compiler was out of scope, because
+`AGENT_LAYER_PLAN.md` asks only for a scaffold generated *from the field
+table*. That remains true of the generator and is unchanged: `scaffold.py`
+reads a `ScaffoldSpec` and never COBOL text. What changed is where the field
+table comes from — `weaver/cobol/` parses the DATA DIVISION and produces it,
+so the spec is derived per program rather than hand-declared. The scope
+limit that survives is narrower and enforced by raising, not by convention:
+one input and one output file, DISPLAY usage only, no `OCCURS` / `RENAMES` /
+`COPY REPLACING`, and exactly one synthesis unit per program.
 
 ## 1. Record type per 01-level group
 
