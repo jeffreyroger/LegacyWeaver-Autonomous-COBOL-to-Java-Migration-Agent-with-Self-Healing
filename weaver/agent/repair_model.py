@@ -13,8 +13,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from weaver.agent.prompt import _scaffold_owned_lines
-from weaver.agent.scaffold import INTEREST_SPEC, ScaffoldSpec
+from weaver.agent.prompt import _accessor, _pic_description, _scaffold_owned_lines
+from weaver.agent.scaffold import (
+    INTEREST_SPEC,
+    ScaffoldSpec,
+    ws_accessors,
+    ws_cobol_name,
+)
 from weaver.agent.segment import Paragraph
 from weaver.classification import Classification, DefectClass
 from weaver.comparison import Divergence
@@ -43,6 +48,29 @@ STRATEGY_HINTS = {
 }
 
 
+def _field_table(spec: ScaffoldSpec) -> str:
+    """Every ar./ws. accessor available to a repair attempt, with its exact
+    Java syntax (field vs. method). The repair loop has no DataContext
+    (unlike synthesis), so this lists the full scaffold surface rather than
+    just the fields one paragraph reads/writes -- real-world testing
+    (shipcost.cob, 2026-08-12) showed the model thrashing between
+    `ar.weight` and `ar.weight()` across repair attempts because the repair
+    prompt never stated which one the scaffold actually generates.
+    """
+    lines = []
+    for name, accessor in sorted(ws_accessors(spec).items()):
+        lines.append(f"- {name}: working storage, accessor {accessor}")
+    for f in spec.input_layout:
+        lines.append(
+            f"- {f.name}: {_pic_description(f)}, accessor {_accessor(f.name, spec)}"
+        )
+    for c in spec.condition_names:
+        lines.append(
+            f'- {c.java_name}(): true when {c.parent_field} == "{c.true_value}"'
+        )
+    return "\n".join(lines) or "(none)"
+
+
 @dataclass
 class RepairAttempt:
     attempt_number: int
@@ -61,7 +89,9 @@ def build_repair_prompt(
     attempts: list[RepairAttempt],
     spec: ScaffoldSpec = INTEREST_SPEC,
 ) -> str:
-    strategy_hint = STRATEGY_HINTS.get(defect_class, "Diagnose from the evidence below.")
+    strategy_hint = STRATEGY_HINTS.get(
+        defect_class, "Diagnose from the evidence below."
+    )
 
     evidence_lines = ["The current method body:", "```java", current_body, "```", ""]
 
@@ -118,6 +148,10 @@ Originating COBOL paragraph ({paragraph.identifier}):
 ```
 {paragraph.source}
 ```
+
+Field table -- the exact accessor syntax for every field/condition on
+ar/ws (do not guess between a plain field and a method call):
+{_field_table(spec)}
 
 {scaffold_owned_section}{history}
 
