@@ -9,7 +9,7 @@
       * zero (no ROUNDED, T1); deliberately has no signed/trailing-
       * separate field, isolating the compound-condition shape as the
       * only new thing under test (Step U4).
-      * Retry: prior CI run hit Groq's free-tier TPM rate limit, not a bug.
+      * Retrigger: with Groq 429 retry/backoff now in inference.py.
       *****************************************************************
        IDENTIFICATION DIVISION.
        PROGRAM-ID. SHIPCOST.
