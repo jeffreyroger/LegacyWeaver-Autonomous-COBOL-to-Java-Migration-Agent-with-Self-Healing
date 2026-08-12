@@ -1,0 +1,6 @@
+# The 2026-08-12 WSL2 work stored part of the tree with CRLF, leaving the repo
+# mixed: a ~50-line edit to AGENT_LAYER_PLAN.md rendered as a 1474-line diff.
+# Normalise to LF in the repository; checkout behaviour is unchanged.
+* text=auto eol=lf
+*.png binary
+*.gif binary
