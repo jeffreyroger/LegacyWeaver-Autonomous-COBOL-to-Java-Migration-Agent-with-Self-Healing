@@ -10,6 +10,7 @@
       * separate field, isolating the compound-condition shape as the
       * only new thing under test (Step U4).
       * Retrigger: with Groq 429 retry/backoff now in inference.py.
+      * Retrigger: provider failures no longer crash the migrate run.
       *****************************************************************
        IDENTIFICATION DIVISION.
        PROGRAM-ID. SHIPCOST.
