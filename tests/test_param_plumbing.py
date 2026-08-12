@@ -99,6 +99,39 @@ def test_try_memory_repair_forwards_spec_to_verify_unit(tmp_path, monkeypatch):
     assert "SENTINEL SCAFFOLD" in seen["text"]
 
 
+def test_backend_build_run_spec_threads_every_request_field(tmp_path):
+    """2026-08-12 handoff Gap 4: every CreateRunRequest field that affects
+    determinism must reach the RunSpec the orchestrator actually runs --
+    not just be echoed back and written to params.json unused."""
+    from backend.models import CreateRunRequest
+    from backend.runs import _build_run_spec
+
+    candidate = tmp_path / "candidate.body.java"
+    candidate.write_text("// candidate body\n")
+
+    req = CreateRunRequest(
+        cobol_source="fixtures/cobol/interest.cob",
+        copybook_dir="fixtures/copybooks",
+        data_file="fixtures/data/accounts.dat",
+        candidate_path=str(candidate),
+        synthesis_mode=False,
+        seed=99,
+        model_name="some-model:1b",
+        model_digest="sha256:deadbeef",
+        max_repair_attempts=7,
+        replay=True,
+    )
+    spec = _build_run_spec(req)
+
+    assert spec.copybook_dir == Path("fixtures/copybooks")
+    assert spec.candidate_body_path == candidate
+    assert spec.max_repairs == 7
+    assert spec.model == "some-model:1b"
+    assert spec.model_digest == "sha256:deadbeef"
+    assert spec.seed == 99
+    assert spec.replay is True
+
+
 def test_verify_candidate_uses_injected_input_data(tmp_path, monkeypatch):
     from weaver.agent import verify as verify_mod
 

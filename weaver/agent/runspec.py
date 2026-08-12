@@ -54,6 +54,7 @@ class RunSpec:
     scaffold_spec: ScaffoldSpec = field(default_factory=lambda: INTEREST_SPEC)
     max_repairs: int = DEFAULT_MAX_REPAIRS
     model: str = DEFAULT_MODEL
+    model_digest: str = ""
     seed: int = DEFAULT_SEED
     replay: bool = False
     # BACKEND_PLAN.md SS4.2's "candidate path or synthesis mode": when set,

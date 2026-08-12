@@ -187,6 +187,138 @@ def test_escalation_decision_on_non_escalated_unit_is_rejected(client):
     assert decision_resp.json()["error_class"] == "INVALID_REQUEST"
 
 
+def test_get_run_includes_diagnostic_for_escalated_unit(client, monkeypatch):
+    """Gap 2: the escalation card needs defect class/delta/confidence/
+    attempts before a human decides accept/reject/body."""
+    from weaver.agent.escalation import DiagnosticRecord
+
+    @dataclass
+    class FakeOrchestratorEscalates(FakeOrchestrator):
+        def run(self):
+            self._emit("*", "plan", "select_units", 0.0, outcome="units=['UNIT-A']")
+            diag = DiagnosticRecord(
+                unit_identifier="UNIT-A", failing_input_record="rec", oracle_value="1.00",
+                candidate_value="2.00", delta="1.00", defect_class="TRUNCATION", confidence=0.9,
+                attempts=[{"attempt": 1, "patch_summary": "x", "why_it_failed": "y"}],
+                assumptions=["a"], suspected_source_lines="1-2", decision_requested="accept?",
+            )
+            self.results["UNIT-A"] = UnitResult("UNIT-A", "escalated", None, 1, False, 0.02, diag)
+            self._persist_state()
+            return self.results
+
+    monkeypatch.setattr(runs_module, "Orchestrator", FakeOrchestratorEscalates)
+    resp = client.post("/runs", json=_create_payload())
+    run_id = resp.json()["run_id"]
+    state = _wait_terminal(client, run_id)
+
+    unit = next(u for u in state["units"] if u["unit_id"] == "UNIT-A")
+    assert unit["diagnostic"]["defect_class"] == "TRUNCATION"
+    assert unit["diagnostic"]["confidence"] == 0.9
+    assert unit["diagnostic"]["attempts"][0]["patch_summary"] == "x"
+
+
+def test_get_run_diagnostic_is_null_for_committed_unit(client):
+    resp = client.post("/runs", json=_create_payload())
+    run_id = resp.json()["run_id"]
+    state = _wait_terminal(client, run_id)
+    assert all(u["diagnostic"] is None for u in state["units"])
+
+
+def test_unit_code_returns_cobol_span_and_java_body(client, monkeypatch):
+    """Gap 1: the console's side-by-side panel needs COBOL text + span
+    and the generated Java body for one unit."""
+    from weaver.agent.segment import Paragraph
+
+    fake_paragraph = Paragraph(identifier="UNIT-A", start_line=10, end_line=12,
+                                source="UNIT-A.\n    COMPUTE X = 1.")
+    monkeypatch.setattr(runs_module, "segment", lambda text: [fake_paragraph])
+
+    resp = client.post("/runs", json=_create_payload())
+    run_id = resp.json()["run_id"]
+    _wait_terminal(client, run_id)
+
+    code_resp = client.get(f"/runs/{run_id}/units/UNIT-A/code")
+    assert code_resp.status_code == 200
+    body = code_resp.json()
+    assert body["unit_id"] == "UNIT-A"
+    assert body["cobol"]["start_line"] == 10
+    assert body["cobol"]["end_line"] == 12
+    assert "COMPUTE X" in body["cobol"]["text"]
+    assert body["java"]["available"] is True
+    assert body["java"]["body"] == "body"  # FakeOrchestrator commits final_body="body"
+
+
+def test_unit_code_404_for_unknown_unit(client, monkeypatch):
+    monkeypatch.setattr(runs_module, "segment", lambda text: [])
+    resp = client.post("/runs", json=_create_payload())
+    run_id = resp.json()["run_id"]
+    _wait_terminal(client, run_id)
+
+    code_resp = client.get(f"/runs/{run_id}/units/NOPE/code")
+    assert code_resp.status_code == 404
+    assert code_resp.json()["error_class"] == "RUN_NOT_FOUND"
+
+
+def test_resume_route_is_reachable(client):
+    """Gap 3: resume_run() existed with no HTTP route. Force a completed
+    run's in-memory lifecycle to INTERRUPTED and confirm the route reaches
+    RunManager.resume_run rather than 404ing -- full resumption behavior
+    against a real Orchestrator is exercised elsewhere; this is a
+    transport-reachability test."""
+    resp = client.post("/runs", json=_create_payload())
+    run_id = resp.json()["run_id"]
+    _wait_terminal(client, run_id)
+
+    from backend.app import run_manager
+    record = run_manager.get_run(run_id)
+    record.lifecycle = "INTERRUPTED"
+
+    resume_resp = client.post(f"/runs/{run_id}/resume")
+    assert resume_resp.status_code == 200
+    assert resume_resp.json()["run_id"] == run_id
+
+
+def test_resume_rejects_non_interrupted_run(client):
+    resp = client.post("/runs", json=_create_payload())
+    run_id = resp.json()["run_id"]
+    _wait_terminal(client, run_id)  # COMPLETED, not INTERRUPTED
+
+    resume_resp = client.post(f"/runs/{run_id}/resume")
+    assert resume_resp.status_code == 400
+    assert resume_resp.json()["error_class"] == "INVALID_REQUEST"
+
+
+def test_list_runs_newest_first_with_counts(client):
+    r1 = client.post("/runs", json=_create_payload()).json()["run_id"]
+    _wait_terminal(client, r1)
+    time.sleep(0.01)
+    r2 = client.post("/runs", json=_create_payload()).json()["run_id"]
+    _wait_terminal(client, r2)
+
+    listing = client.get("/runs").json()
+    ids = [r["run_id"] for r in listing]
+    assert ids.index(r2) < ids.index(r1)
+    entry = next(r for r in listing if r["run_id"] == r2)
+    assert entry["lifecycle"] == "COMPLETED"
+    assert entry["unit_count"] == 2
+    assert entry["committed_count"] == 2
+
+
+def test_params_json_records_resolved_spec_alongside_request(client):
+    """Gap 4: params.json must describe the spec that actually ran, not
+    only the raw request -- CLAUDE.md rule 13 / NFR-D1."""
+    resp = client.post("/runs", json=_create_payload(seed=5, max_repair_attempts=9))
+    run_id = resp.json()["run_id"]
+    _wait_terminal(client, run_id)
+
+    from backend.app import run_manager
+    record = run_manager.get_run(run_id)
+    params = json.loads(record.params_path.read_text())
+    assert params["request"]["seed"] == 5
+    assert params["resolved_spec"]["seed"] == 5
+    assert params["resolved_spec"]["max_repairs"] == 9
+
+
 def test_bind_refusal_for_non_loopback_host():
     from backend.__main__ import _validate_bind_host
     from backend.errors import OfflineViolationError

@@ -9,6 +9,7 @@ tests/test_backend_import_direction.py).
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
 import shutil
@@ -150,6 +151,12 @@ def get_run(run_id: str) -> dict:
             {
                 "unit_id": u.unit_id, "status": u.status, "model_calls": u.model_calls,
                 "memory_hit": u.memory_hit, "duration_seconds": u.duration_seconds,
+                # Gap 2: the escalation card needs to show why a unit
+                # escalated (defect class, delta, confidence, prior repair
+                # attempts) before a human is asked to accept/reject it.
+                # Serialized verbatim -- null for a unit that hasn't
+                # escalated, never a synthesized placeholder.
+                "diagnostic": dataclasses.asdict(u.diagnostic) if u.diagnostic is not None else None,
             }
             for u in units
         ],
@@ -158,10 +165,35 @@ def get_run(run_id: str) -> dict:
     }
 
 
+@app.get("/runs")
+def list_runs() -> list[dict]:
+    """Gap 5: history sidebar / run-ID recovery after a page refresh.
+    Newest first; includes INTERRUPTED runs, which are what the resume
+    button targets."""
+    return run_manager.list_runs()
+
+
+@app.get("/runs/{run_id}/units/{unit_id}/code")
+def get_unit_code(run_id: str, unit_id: str) -> dict:
+    """Gap 1: COBOL source span + generated Java body for the console's
+    side-by-side, provenance-hover panel."""
+    record = run_manager.get_run(run_id)
+    return run_manager.unit_code(record, unit_id)
+
+
 @app.post("/runs/{run_id}/cancel")
 def cancel_run(run_id: str) -> dict:
     record = run_manager.cancel_run(run_id)
     return {"run_id": record.run_id, "cancel_requested": True, "lifecycle": record.lifecycle}
+
+
+@app.post("/runs/{run_id}/resume")
+def resume_run(run_id: str) -> dict:
+    """Gap 3: NFR-R2 resumability was fully implemented in RunManager but
+    unreachable from a browser. InvalidRequestError (400) propagates from
+    resume_run when the run isn't INTERRUPTED."""
+    record = run_manager.resume_run(run_id)
+    return {"run_id": record.run_id, "lifecycle": record.lifecycle}
 
 
 @app.get("/runs/{run_id}/divergences/{unit_id}")

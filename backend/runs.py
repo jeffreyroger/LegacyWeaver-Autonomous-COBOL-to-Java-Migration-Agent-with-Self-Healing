@@ -11,6 +11,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import threading
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -21,6 +22,7 @@ from weaver.agent.metrics import compute_metrics
 from weaver.agent.orchestrator import Orchestrator, UnitResult
 from weaver.agent.program_profiles import program_profile
 from weaver.agent.runspec import RunSpec
+from weaver.agent.segment import segment
 from weaver.agent.signature import build_signature
 from weaver.classification import Classification, DefectClass
 from weaver.report import Report
@@ -65,6 +67,7 @@ def _build_run_spec(request: CreateRunRequest) -> RunSpec:
         candidate_body_path=Path(request.candidate_path) if not request.synthesis_mode else None,
         max_repairs=request.max_repair_attempts,
         model=request.model_name,
+        model_digest=request.model_digest,
         seed=request.seed,
         replay=request.replay,
     )
@@ -76,6 +79,7 @@ class RunRecord:
     request: CreateRunRequest
     run_dir: Path
     lifecycle: str = "CREATED"
+    created_at: float = field(default_factory=time.time)
     error: str | None = None
     event_bus: RunEventBus = field(default_factory=RunEventBus)
     cancel_requested: threading.Event = field(default_factory=threading.Event)
@@ -127,7 +131,11 @@ class RunManager:
         record = RunRecord(run_id=run_id, request=req, run_dir=run_dir)
         # Persist determinism-affecting parameters before the first unit
         # executes -- the reproducibility record required by NFR-D1/§4.2.
-        record.params_path.write_text(json.dumps(req.model_dump(), indent=2), encoding="utf-8")
+        # "request" is the raw caller input; "resolved_spec" (added once the
+        # worker builds the RunSpec, see _write_resolved_spec) is what
+        # actually ran -- CLAUDE.md rule 13's guard is that the two must
+        # never silently diverge.
+        self._write_params(record, resolved_spec=None)
         self._write_lifecycle(record)
 
         with self._registry_lock:
@@ -168,6 +176,75 @@ class RunManager:
             if result.unit_id == unit_id:
                 return result.last_report
         return None
+
+    def unit_code(self, record: RunRecord, unit_id: str) -> dict:
+        """Gap 1: COBOL source span + generated Java body for the console's
+        side-by-side panel. Re-runs segment() on the run's own cobol_source
+        rather than caching paragraph state on RunRecord -- the field table
+        already resolved before this point is what should be trusted."""
+        units = {r.unit_id: r for r in self.list_units(record)}
+        unit = units.get(unit_id)
+        if unit is None:
+            raise RunNotFoundError(f"no such unit {unit_id!r} on run {record.run_id}")
+
+        cobol_path = Path(record.request.cobol_source)
+        paragraphs = segment(cobol_path.read_text(encoding="utf-8"))
+        paragraph = next((p for p in paragraphs if p.identifier == unit_id), None)
+        if paragraph is None:
+            raise RunNotFoundError(f"no paragraph {unit_id!r} in {cobol_path}")
+
+        return {
+            "unit_id": unit_id,
+            "cobol": {
+                "source_path": str(cobol_path),
+                "start_line": paragraph.start_line,
+                "end_line": paragraph.end_line,
+                "text": paragraph.source,
+            },
+            "java": {"body": unit.final_body, "available": unit.final_body is not None},
+        }
+
+    def list_runs(self) -> list[dict]:
+        """Gap 5: history sidebar / run-ID recovery after a page refresh.
+        Merges the on-disk lifecycle.json/orchestrator_state.json scan
+        (covers runs from a prior process, including INTERRUPTED ones) with
+        live in-memory records (more current for a run still executing in
+        this process) -- newest first."""
+        by_id: dict[str, dict] = {}
+        if RUNS_ROOT.exists():
+            for run_dir in RUNS_ROOT.iterdir():
+                lifecycle_path = run_dir / "lifecycle.json"
+                if not lifecycle_path.exists():
+                    continue
+                data = json.loads(lifecycle_path.read_text(encoding="utf-8"))
+                run_id = data.get("run_id", run_dir.name)
+                unit_count = 0
+                committed_count = 0
+                state_path = run_dir / "orchestrator_state.json"
+                if state_path.exists():
+                    try:
+                        state = json.loads(state_path.read_text(encoding="utf-8"))
+                        unit_count = len(state)
+                        committed_count = sum(1 for u in state.values() if u.get("status") == "committed")
+                    except json.JSONDecodeError:
+                        pass
+                by_id[run_id] = {
+                    "run_id": run_id, "lifecycle": data.get("lifecycle"),
+                    "created_at": data.get("created_at"), "unit_count": unit_count,
+                    "committed_count": committed_count,
+                }
+
+        with self._registry_lock:
+            live_records = list(self._runs.values())
+        for record in live_records:
+            units = self.list_units(record)
+            by_id[record.run_id] = {
+                "run_id": record.run_id, "lifecycle": record.lifecycle,
+                "created_at": record.created_at, "unit_count": len(units),
+                "committed_count": sum(1 for u in units if u.status == "committed"),
+            }
+
+        return sorted(by_id.values(), key=lambda r: r["created_at"] or 0, reverse=True)
 
     # -- B6: escalation decisions ----------------------------------------
 
@@ -261,6 +338,7 @@ class RunManager:
             self._write_lifecycle(record)
             try:
                 spec = _build_run_spec(record.request)
+                self._write_params(record, resolved_spec=spec.to_dict())
                 orchestrator = Orchestrator(
                     spec=spec,
                     trace_path=record.trace_path,
@@ -291,9 +369,15 @@ class RunManager:
 
     # -- B7: checkpoint / resume --------------------------------------------
 
+    def _write_params(self, record: RunRecord, resolved_spec: dict | None) -> None:
+        record.params_path.write_text(json.dumps({
+            "request": record.request.model_dump(), "resolved_spec": resolved_spec,
+        }, indent=2), encoding="utf-8")
+
     def _write_lifecycle(self, record: RunRecord) -> None:
         record.lifecycle_path.write_text(json.dumps({
             "run_id": record.run_id, "lifecycle": record.lifecycle, "error": record.error,
+            "created_at": record.created_at,
         }, indent=2), encoding="utf-8")
 
     def _scan_for_interrupted_runs(self) -> None:
@@ -341,6 +425,7 @@ class RunManager:
             self._write_lifecycle(record)
             try:
                 spec = _build_run_spec(record.request)
+                self._write_params(record, resolved_spec=spec.to_dict())
                 orchestrator = Orchestrator(
                     spec=spec,
                     trace_path=record.trace_path,
