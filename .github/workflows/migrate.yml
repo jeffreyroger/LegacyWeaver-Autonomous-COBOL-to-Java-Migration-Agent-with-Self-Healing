@@ -66,8 +66,15 @@ jobs:
           FILES: ${{ steps.changed.outputs.files }}
           RUN_ID: ${{ github.run_id }}
         run: |
-          set -e
+          # Deliberately no `set -e`: one program escalating or failing to
+          # compile must not discard the Java already generated for every
+          # program migrated before it in this loop. Each program's outcome
+          # is tracked independently; a bad path is still fatal immediately
+          # (rejecting unsafe input is a security gate, not a migration
+          # outcome). Failures/escalations are reported after every program
+          # has run, via FAILED_FILES.
           mkdir -p output
+          failed=""
           for f in $FILES; do
             case "$f" in
               *[!A-Za-z0-9_./-]*|*'..'*)
@@ -83,16 +90,24 @@ jobs:
             echo "::group::Migrating $f"
             copybook_dir="input/copybooks"
             run_dir="runs/ci-$(basename "$f" | sed 's/\.[^.]*$//')-${RUN_ID}"
-            weaver migrate "$f" \
+            if ! weaver migrate "$f" \
               --copybook "$copybook_dir" \
               --out output \
               --run-dir "$run_dir" \
-              --json
+              --json; then
+              echo "::warning::migration failed or escalated for $f"
+              failed="$failed $f"
+            fi
             echo "::endgroup::"
           done
+          if [ -n "$failed" ]; then
+            echo "FAILED_FILES=$failed" >> "$GITHUB_ENV"
+          fi
 
       - name: Commit generated Java to output/
-        if: steps.changed.outputs.files != ''
+        # always(): earlier programs' output must still be committed even
+        # when a later program in the loop above failed/escalated.
+        if: always() && steps.changed.outputs.files != ''
         uses: stefanzweifel/git-auto-commit-action@4a55954c782fc1ea30b9056cd3e7a2b40ca8887d # v7.2.0
         env:
           FILES: ${{ steps.changed.outputs.files }}
@@ -102,3 +117,9 @@ jobs:
           file_pattern: "output/**"
           commit_user_name: "github-actions[bot]"
           commit_user_email: "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fail if any program did not complete cleanly
+        if: always() && steps.changed.outputs.files != '' && env.FAILED_FILES != ''
+        run: |
+          echo "::error::migration failed or escalated for:${FAILED_FILES}"
+          exit 1
