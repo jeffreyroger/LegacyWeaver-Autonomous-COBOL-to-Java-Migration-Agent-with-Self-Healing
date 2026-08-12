@@ -2,7 +2,7 @@
 
 Binding, inference-loopback validation, and static asset serving are all
 enforced here at startup/mount time, not left to configuration (§5.1,
-§5.2, §5.4). This module imports the agent; nothing in weaver/agent may
+§5.2, §5.4). This module imports the agent; nothing in zuse/agent may
 import this module or fastapi/starlette (§3.3, enforced by
 tests/test_backend_import_direction.py).
 """
@@ -22,10 +22,15 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from weaver.agent.inference import OLLAMA_HOST, _assert_loopback
+from zuse.agent.inference import OLLAMA_HOST, _assert_loopback
 
 from backend.errors import RunNotFoundError, ServiceError, ToolchainMissingError
-from backend.models import CreateRunRequest, CreateRunResponse, EscalationDecisionRequest, HealthResponse
+from backend.models import (
+    CreateRunRequest,
+    CreateRunResponse,
+    EscalationDecisionRequest,
+    HealthResponse,
+)
 from backend.runs import RunManager
 
 BIND_HOST = "127.0.0.1"
@@ -41,7 +46,7 @@ async def _lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="LegacyWeaver run service", lifespan=_lifespan)
+app = FastAPI(title="Zuse run service", lifespan=_lifespan)
 run_manager = RunManager()
 
 
@@ -55,7 +60,9 @@ def _gnucobol_major_version(cobc_path: str) -> int | None:
     than assumed-fine, since SRS §2.4 requires 3.x and §8 OI-3 explicitly
     calls out that 2.x silently diverges rather than erroring."""
     try:
-        proc = subprocess.run([cobc_path, "--version"], capture_output=True, text=True, timeout=5)
+        proc = subprocess.run(
+            [cobc_path, "--version"], capture_output=True, text=True, timeout=5
+        )
     except Exception:
         return None
     match = _GNUCOBOL_VERSION_RE.search(proc.stdout or proc.stderr or "")
@@ -75,7 +82,10 @@ def _check_toolchain() -> tuple[bool, str]:
     if major is None:
         return False, "gnucobol_version_undetermined"
     if major < MIN_GNUCOBOL_MAJOR:
-        return False, f"gnucobol_version_unsupported:{major}.x (requires {MIN_GNUCOBOL_MAJOR}.x, SRS §2.4)"
+        return (
+            False,
+            f"gnucobol_version_unsupported:{major}.x (requires {MIN_GNUCOBOL_MAJOR}.x, SRS §2.4)",
+        )
     return True, "ok"
 
 
@@ -91,7 +101,10 @@ def _inference_available() -> bool:
 
 @app.exception_handler(ServiceError)
 def _service_error_handler(request: Request, exc: ServiceError) -> JSONResponse:
-    return JSONResponse(status_code=exc.http_status, content={"error_class": exc.error_class, "message": exc.message})
+    return JSONResponse(
+        status_code=exc.http_status,
+        content={"error_class": exc.error_class, "message": exc.message},
+    )
 
 
 @app.exception_handler(Exception)
@@ -109,7 +122,10 @@ def _internal_error_handler(request: Request, exc: Exception) -> JSONResponse:
     to the most specific registered handler in the exception's MRO.
     """
     trace_id = uuid.uuid4().hex
-    return JSONResponse(status_code=500, content={"error_class": "INTERNAL", "message": str(exc), "trace_id": trace_id})
+    return JSONResponse(
+        status_code=500,
+        content={"error_class": "INTERNAL", "message": str(exc), "trace_id": trace_id},
+    )
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -149,14 +165,19 @@ def get_run(run_id: str) -> dict:
         "lifecycle": lifecycle,
         "units": [
             {
-                "unit_id": u.unit_id, "status": u.status, "model_calls": u.model_calls,
-                "memory_hit": u.memory_hit, "duration_seconds": u.duration_seconds,
+                "unit_id": u.unit_id,
+                "status": u.status,
+                "model_calls": u.model_calls,
+                "memory_hit": u.memory_hit,
+                "duration_seconds": u.duration_seconds,
                 # Gap 2: the escalation card needs to show why a unit
                 # escalated (defect class, delta, confidence, prior repair
                 # attempts) before a human is asked to accept/reject it.
                 # Serialized verbatim -- null for a unit that hasn't
                 # escalated, never a synthesized placeholder.
-                "diagnostic": dataclasses.asdict(u.diagnostic) if u.diagnostic is not None else None,
+                "diagnostic": dataclasses.asdict(u.diagnostic)
+                if u.diagnostic is not None
+                else None,
             }
             for u in units
         ],
@@ -184,7 +205,11 @@ def get_unit_code(run_id: str, unit_id: str) -> dict:
 @app.post("/runs/{run_id}/cancel")
 def cancel_run(run_id: str) -> dict:
     record = run_manager.cancel_run(run_id)
-    return {"run_id": record.run_id, "cancel_requested": True, "lifecycle": record.lifecycle}
+    return {
+        "run_id": record.run_id,
+        "cancel_requested": True,
+        "lifecycle": record.lifecycle,
+    }
 
 
 @app.post("/runs/{run_id}/resume")
@@ -201,12 +226,16 @@ def get_divergences(run_id: str, unit_id: str) -> dict:
     record = run_manager.get_run(run_id)
     report = run_manager.divergence_report(record, unit_id)
     if report is None:
-        raise RunNotFoundError(f"no divergence report for unit {unit_id} on run {run_id}")
+        raise RunNotFoundError(
+            f"no divergence report for unit {unit_id} on run {run_id}"
+        )
     return json.loads(report.to_json())
 
 
 @app.post("/runs/{run_id}/escalations/{unit_id}/decision")
-def post_escalation_decision(run_id: str, unit_id: str, req: EscalationDecisionRequest) -> dict:
+def post_escalation_decision(
+    run_id: str, unit_id: str, req: EscalationDecisionRequest
+) -> dict:
     record = run_manager.get_run(run_id)
     return run_manager.decide_escalation(record, unit_id, req.decision, req.body)
 

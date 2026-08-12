@@ -29,7 +29,7 @@ export default function Sidebar({ runs, currentRunId, onSelectRun, onNewProgram,
               <path d="M4.5 12c3.2-3.4 5.4 3.4 8.6 0s2.9-3.4 6.4 0" />
             </svg>
           </div>
-          <div className="brand-name">legacyweaver</div>
+          <div className="brand-name">zuse</div>
         </div>
         <button className="chevron-btn" onClick={onToggleCollapse} aria-label="Toggle sidebar" aria-expanded={!collapsed} id="chevronBtn">
           <ChevronLeftIcon />

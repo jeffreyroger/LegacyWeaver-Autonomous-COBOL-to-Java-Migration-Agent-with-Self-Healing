@@ -1,4 +1,4 @@
-// Renders a Report's divergence list verbatim (weaver/report.py Report.to_json()).
+// Renders a Report's divergence list verbatim (zuse/report.py Report.to_json()).
 // No comparison or classification logic here -- every value is already
 // decided by the oracle harness before it reaches this component.
 export default function DivergenceTable({ report }) {

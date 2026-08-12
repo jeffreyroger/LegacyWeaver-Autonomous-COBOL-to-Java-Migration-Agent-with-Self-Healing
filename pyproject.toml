@@ -1,5 +1,5 @@
 [project]
-name = "legacyweaver-mvp"
+name = "zuse"
 version = "0.1.0"
 description = "Differential verification harness for COBOL-to-Java migration (PRISM Hackathon MVP)"
 requires-python = ">=3.11"
@@ -15,11 +15,11 @@ backend = [
 ]
 
 [project.scripts]
-weaver = "weaver.cli:main"
+zuse = "zuse.cli:main"
 
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["weaver*"]
+include = ["zuse*"]

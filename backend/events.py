@@ -1,6 +1,6 @@
 """Trace event fan-out — BACKEND_PLAN.md §4.3 / Step B4.
 
-The orchestrator's disk write (weaver/agent/orchestrator.py `_emit`) remains
+The orchestrator's disk write (zuse/agent/orchestrator.py `_emit`) remains
 the sole source of truth. This module only tees those same dicts to live
 SSE subscribers and keeps a bounded in-memory replay buffer so a client
 reconnecting with `Last-Event-ID` can catch up without re-reading the whole
@@ -27,7 +27,9 @@ class RunEventBus:
     _lock: threading.Lock = field(default_factory=threading.Lock)
     _seq: int = 0
     _buffer: list[tuple[int, dict]] = field(default_factory=list)
-    _subscribers: dict[int, "queue.Queue[tuple[int, dict] | None]"] = field(default_factory=dict)
+    _subscribers: dict[int, "queue.Queue[tuple[int, dict] | None]"] = field(
+        default_factory=dict
+    )
     _next_subscriber_id: int = 0
     closed: bool = False
 
@@ -59,7 +61,9 @@ class RunEventBus:
                 except queue.Full:
                     pass
 
-    def subscribe(self, last_event_id: int = 0) -> tuple[int, "queue.Queue[tuple[int, dict] | None]", list[tuple[int, dict]]]:
+    def subscribe(
+        self, last_event_id: int = 0
+    ) -> tuple[int, "queue.Queue[tuple[int, dict] | None]", list[tuple[int, dict]]]:
         """Returns (subscriber_id, live_queue, backlog).
 
         `backlog` is every buffered event with seq > last_event_id, served
@@ -71,7 +75,9 @@ class RunEventBus:
             sub_id = self._next_subscriber_id
             self._next_subscriber_id += 1
             backlog = [(s, e) for s, e in self._buffer if s > last_event_id]
-            q: "queue.Queue[tuple[int, dict] | None]" = queue.Queue(maxsize=SUBSCRIBER_QUEUE_SIZE)
+            q: "queue.Queue[tuple[int, dict] | None]" = queue.Queue(
+                maxsize=SUBSCRIBER_QUEUE_SIZE
+            )
             if not self.closed:
                 self._subscribers[sub_id] = q
             return sub_id, q, backlog

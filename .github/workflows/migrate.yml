@@ -7,8 +7,8 @@ name: Migrate COBOL to Java
 on:
   push:
     paths:
-      - "input/**/*.cob"
-      - "input/**/*.cbl"
+      - "zuse/examples/input/**/*.cob"
+      - "zuse/examples/input/**/*.cbl"
 
 permissions:
   contents: write
@@ -30,7 +30,7 @@ jobs:
           else
             base=$(git hash-object -t tree /dev/null)
           fi
-          files=$(git diff --name-only "$base" HEAD -- 'input/*.cob' 'input/**/*.cob' 'input/*.cbl' 'input/**/*.cbl' | tr '\n' ' ')
+          files=$(git diff --name-only "$base" HEAD -- 'zuse/examples/input/*.cob' 'zuse/examples/input/**/*.cob' 'zuse/examples/input/*.cbl' 'zuse/examples/input/**/*.cbl' | tr '\n' ' ')
           echo "files=$files" >> "$GITHUB_OUTPUT"
           echo "Changed COBOL files: $files"
 
@@ -54,14 +54,14 @@ jobs:
           sudo apt-get install -y gnucobol3 || sudo apt-get install -y gnucobol
           cobc --version | head -n1
 
-      - name: Install weaver
+      - name: Install zuse
         if: steps.changed.outputs.files != ''
         run: pip install -e .
 
       - name: Migrate and verify each changed program
         if: steps.changed.outputs.files != ''
         env:
-          WEAVER_INFERENCE_PROVIDER: groq
+          ZUSE_INFERENCE_PROVIDER: groq
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           FILES: ${{ steps.changed.outputs.files }}
           RUN_ID: ${{ github.run_id }}
@@ -73,7 +73,7 @@ jobs:
           # (rejecting unsafe input is a security gate, not a migration
           # outcome). Failures/escalations are reported after every program
           # has run, via FAILED_FILES.
-          mkdir -p output
+          mkdir -p zuse/examples/output
           failed=""
           for f in $FILES; do
             case "$f" in
@@ -81,18 +81,18 @@ jobs:
                 echo "::error::rejecting unsafe path: $f"
                 exit 1
                 ;;
-              input/*.cob|input/*.cbl|input/*/*.cob|input/*/*.cbl) ;;
+              zuse/examples/input/*.cob|zuse/examples/input/*.cbl|zuse/examples/input/*/*.cob|zuse/examples/input/*/*.cbl) ;;
               *)
-                echo "::error::rejecting path outside input/: $f"
+                echo "::error::rejecting path outside zuse/examples/input/: $f"
                 exit 1
                 ;;
             esac
             echo "::group::Migrating $f"
-            copybook_dir="input/copybooks"
-            run_dir="runs/ci-$(basename "$f" | sed 's/\.[^.]*$//')-${RUN_ID}"
-            if ! weaver migrate "$f" \
+            copybook_dir="zuse/examples/input/copybooks"
+            run_dir="zuse/examples/generated/runs/ci-$(basename "$f" | sed 's/\.[^.]*$//')-${RUN_ID}"
+            if ! zuse migrate "$f" \
               --copybook "$copybook_dir" \
-              --out output \
+              --out zuse/examples/output \
               --run-dir "$run_dir" \
               --json; then
               echo "::warning::migration failed or escalated for $f"
@@ -104,7 +104,7 @@ jobs:
             echo "FAILED_FILES=$failed" >> "$GITHUB_ENV"
           fi
 
-      - name: Commit generated Java to output/
+      - name: Commit generated Java to zuse/examples/output/
         # always(): earlier programs' output must still be committed even
         # when a later program in the loop above failed/escalated.
         if: always() && steps.changed.outputs.files != ''
@@ -114,7 +114,7 @@ jobs:
           RUN_ID: ${{ github.run_id }}
         with:
           commit_message: "ci: migrate COBOL to Java for ${{ env.FILES }} (run ${{ env.RUN_ID }})"
-          file_pattern: "output/**"
+          file_pattern: "zuse/examples/output/**"
           commit_user_name: "github-actions[bot]"
           commit_user_email: "github-actions[bot]@users.noreply.github.com"
 

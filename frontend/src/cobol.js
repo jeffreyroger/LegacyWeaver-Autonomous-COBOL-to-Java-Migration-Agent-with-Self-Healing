@@ -1,6 +1,6 @@
 // Minimal COBOL line tokenizer for syntax highlighting, ported from the
 // original static mockup (frontend.html) — pure display logic, no parsing
-// decisions that affect correctness (that all lives in weaver/cobol/).
+// decisions that affect correctness (that all lives in zuse/cobol/).
 
 const COBOL_VERBS = ['COMPUTE', 'MOVE', 'PERFORM', 'IF', 'ELSE', 'DISPLAY', 'ACCEPT', 'ADD', 'SUBTRACT', 'MULTIPLY', 'DIVIDE', 'READ', 'WRITE', 'OPEN', 'CLOSE', 'STOP', 'EVALUATE', 'SET', 'CALL']
 const COBOL_KW = ['ROUNDED', 'ON', 'SIZE', 'ERROR', 'TO', 'FROM', 'BY', 'GIVING', 'THRU', 'UNTIL', 'VARYING', 'END-COMPUTE', 'END-IF', 'END-PERFORM', 'END-EVALUATE', 'PIC', 'COMP-3', 'COMP', 'VALUE', 'RUN']

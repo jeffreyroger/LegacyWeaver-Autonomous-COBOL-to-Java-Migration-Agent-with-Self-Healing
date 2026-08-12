@@ -13,7 +13,7 @@ const DEFAULTS = {
 }
 
 // Advisory only, not authoritative -- the backend's real per-program
-// pairing lives in weaver/agent/program_profiles.py's _PROGRAM_PATHS. This
+// pairing lives in zuse/agent/program_profiles.py's _PROGRAM_PATHS. This
 // just stops the single most common mistake: switching COBOL source but
 // leaving a stale data file behind, which silently feeds one program's
 // record layout the wrong bytes (a real repro: WHSEPROC run against
@@ -67,7 +67,7 @@ export default function SplashForm({ health, onStart, starting, error }) {
         <div className="splash-head">
           <h1 className="splash-title">Configure a migration run</h1>
           <p className="splash-sub">
-            Paths are read from the machine running the backend service (127.0.0.1). LegacyWeaver migrates the
+            Paths are read from the machine running the backend service (127.0.0.1). Zuse migrates the
             program to Java and verifies every line against the oracle, byte for byte.
           </p>
         </div>

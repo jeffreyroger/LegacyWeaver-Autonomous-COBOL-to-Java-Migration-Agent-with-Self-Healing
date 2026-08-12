@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from weaver.agent.runspec import DEFAULT_MAX_REPAIRS, DEFAULT_MODEL, DEFAULT_SEED
+from zuse.agent.runspec import DEFAULT_MAX_REPAIRS, DEFAULT_MODEL, DEFAULT_SEED
 
 
 class CreateRunRequest(BaseModel):

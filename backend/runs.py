@@ -1,7 +1,7 @@
 """Run lifecycle and orchestration — BACKEND_PLAN.md §3.2, §4.2, §4.5, Steps B3/B6/B7.
 
 `RunManager` is the only place the API touches the agent. It imports
-`weaver.agent.orchestrator.Orchestrator` and nothing more from the agent's
+`zuse.agent.orchestrator.Orchestrator` and nothing more from the agent's
 correctness path -- it never computes, filters, or classifies anything
 itself (§1.2).
 """
@@ -18,23 +18,23 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from weaver.agent.attribution import verify_unit
-from weaver.agent.memory import MemoryCase, embed
-from weaver.agent.metrics import compute_metrics
-from weaver.atomic_json import write_json_atomic
-from weaver.agent.orchestrator import Orchestrator, UnitResult
-from weaver.agent.program_profiles import program_profile
-from weaver.agent.runspec import RunSpec
-from weaver.agent.segment import segment
-from weaver.agent.signature import build_signature
-from weaver.classification import Classification, DefectClass
-from weaver.report import Report
+from zuse.agent.attribution import verify_unit
+from zuse.agent.memory import MemoryCase, embed
+from zuse.agent.metrics import compute_metrics
+from zuse.atomic_json import write_json_atomic
+from zuse.agent.orchestrator import Orchestrator, UnitResult
+from zuse.agent.program_profiles import program_profile
+from zuse.agent.runspec import RunSpec
+from zuse.agent.segment import segment
+from zuse.agent.signature import build_signature
+from zuse.classification import Classification, DefectClass
+from zuse.report import Report
 
 from backend.errors import InvalidRequestError, RunNotFoundError
 from backend.events import RunEventBus
 from backend.models import CreateRunRequest
 
-RUNS_ROOT = Path("generated/runs")
+RUNS_ROOT = Path("zuse/examples/generated/runs")
 
 LIFECYCLE_TERMINAL = {"COMPLETED", "PARTIAL", "FAILED", "CANCELLED"}
 
@@ -42,7 +42,7 @@ LIFECYCLE_TERMINAL = {"COMPLETED", "PARTIAL", "FAILED", "CANCELLED"}
 def _build_run_spec(request: CreateRunRequest) -> RunSpec:
     """Translate a CreateRunRequest into the RunSpec the orchestrator runs.
 
-    Mirrors weaver/cli.py's build_migrate_spec: every parameter that
+    Mirrors zuse/cli.py's build_migrate_spec: every parameter that
     reaches this function must land in the RunSpec, and per-program
     defaults (scaffold_path/golden_output/reference_body_path/
     scaffold_spec) come from the same ProgramProfile registry the CLI
@@ -60,14 +60,20 @@ def _build_run_spec(request: CreateRunRequest) -> RunSpec:
         cobol_source=cobol_source,
         copybook_dir=Path(request.copybook_dir) if request.copybook_dir else None,
         input_data=Path(request.data_file),
-        golden_output=(profile.golden_output if profile else None) or defaults.golden_output,
-        scaffold_path=(profile.scaffold_path if profile else None) or defaults.scaffold_path,
+        golden_output=(profile.golden_output if profile else None)
+        or defaults.golden_output,
+        scaffold_path=(profile.scaffold_path if profile else None)
+        or defaults.scaffold_path,
         memory_store_path=defaults.memory_store_path,
-        reference_body_path=(profile.reference_body_path if profile else None) or defaults.reference_body_path,
+        reference_body_path=(profile.reference_body_path if profile else None)
+        or defaults.reference_body_path,
         reference_paragraph_id=(profile.reference_paragraph_id if profile else None)
-                                or defaults.reference_paragraph_id,
-        scaffold_spec=(profile.scaffold_spec if profile else None) or defaults.scaffold_spec,
-        candidate_body_path=Path(request.candidate_path) if not request.synthesis_mode else None,
+        or defaults.reference_paragraph_id,
+        scaffold_spec=(profile.scaffold_spec if profile else None)
+        or defaults.scaffold_spec,
+        candidate_body_path=Path(request.candidate_path)
+        if not request.synthesis_mode
+        else None,
         max_repairs=request.max_repair_attempts,
         model=request.model_name,
         model_digest=request.model_digest,
@@ -125,7 +131,9 @@ class RunManager:
         if not req.synthesis_mode and not req.candidate_path:
             raise InvalidRequestError("synthesis_mode=false requires candidate_path")
         if not req.synthesis_mode and not Path(req.candidate_path).exists():
-            raise InvalidRequestError(f"candidate_path does not exist: {req.candidate_path}")
+            raise InvalidRequestError(
+                f"candidate_path does not exist: {req.candidate_path}"
+            )
 
         run_id = uuid.uuid4().hex
         run_dir = RUNS_ROOT / run_id
@@ -228,12 +236,16 @@ class RunManager:
                     try:
                         state = json.loads(state_path.read_text(encoding="utf-8"))
                         unit_count = len(state)
-                        committed_count = sum(1 for u in state.values() if u.get("status") == "committed")
+                        committed_count = sum(
+                            1 for u in state.values() if u.get("status") == "committed"
+                        )
                     except json.JSONDecodeError:
                         pass
                 by_id[run_id] = {
-                    "run_id": run_id, "lifecycle": data.get("lifecycle"),
-                    "created_at": data.get("created_at"), "unit_count": unit_count,
+                    "run_id": run_id,
+                    "lifecycle": data.get("lifecycle"),
+                    "created_at": data.get("created_at"),
+                    "unit_count": unit_count,
                     "committed_count": committed_count,
                 }
 
@@ -242,8 +254,10 @@ class RunManager:
         for record in live_records:
             units = self.list_units(record)
             by_id[record.run_id] = {
-                "run_id": record.run_id, "lifecycle": record.lifecycle,
-                "created_at": record.created_at, "unit_count": len(units),
+                "run_id": record.run_id,
+                "lifecycle": record.lifecycle,
+                "created_at": record.created_at,
+                "unit_count": len(units),
                 "committed_count": sum(1 for u in units if u.status == "committed"),
             }
 
@@ -251,7 +265,9 @@ class RunManager:
 
     # -- B6: escalation decisions ----------------------------------------
 
-    def decide_escalation(self, record: RunRecord, unit_id: str, decision: str, body: str | None) -> dict:
+    def decide_escalation(
+        self, record: RunRecord, unit_id: str, decision: str, body: str | None
+    ) -> dict:
         """Accept, reject, or supply a body for an escalated unit.
 
         Any accepted/supplied body is re-verified against the oracle before
@@ -264,11 +280,18 @@ class RunManager:
             raise InvalidRequestError(f"unit {unit_id} is not in an escalated state")
 
         if decision == "reject":
-            outcome = {"unit_id": unit_id, "decision": "reject", "verified": False, "committed": False}
+            outcome = {
+                "unit_id": unit_id,
+                "decision": "reject",
+                "verified": False,
+                "committed": False,
+            }
         elif decision in ("accept", "body"):
             candidate_body = body if decision == "body" else unit.final_body
             if not candidate_body:
-                raise InvalidRequestError("no body available to verify for this decision")
+                raise InvalidRequestError(
+                    "no body available to verify for this decision"
+                )
             work_dir = record.run_dir / "escalations" / unit_id
             # verify_unit defaults to RunSpec.default() (the interest.cob
             # demo scaffold) when spec is omitted -- for any other program
@@ -279,12 +302,17 @@ class RunManager:
             # here: `unit` above came from list_units(), which returns []
             # when orchestrator is None, and we'd have raised
             # InvalidRequestError before reaching this line in that case.
-            result = verify_unit(unit_id, candidate_body, work_dir, spec=record.orchestrator.spec)
+            result = verify_unit(
+                unit_id, candidate_body, work_dir, spec=record.orchestrator.spec
+            )
             verified = result.compiled and result.report.divergence_count == 0
             if verified:
                 with record.lock:
                     record.orchestrator.results[unit_id] = dataclasses.replace(
-                        unit, status="committed", final_body=candidate_body, last_report=result.report,
+                        unit,
+                        status="committed",
+                        final_body=candidate_body,
+                        last_report=result.report,
                     )
                     record.orchestrator._persist_state()
                 # B6 item 3 / FR-6.4 -- write back only after verification
@@ -292,18 +320,26 @@ class RunManager:
                 # its own (§1.2), the byte comparison already ran and passed.
                 self._write_back_escalation(record, unit, candidate_body)
             outcome = {
-                "unit_id": unit_id, "decision": decision, "verified": verified, "committed": verified,
-                "divergence_count": result.report.divergence_count if result.compiled else None,
+                "unit_id": unit_id,
+                "decision": decision,
+                "verified": verified,
+                "committed": verified,
+                "divergence_count": result.report.divergence_count
+                if result.compiled
+                else None,
             }
         else:
             raise InvalidRequestError(f"unknown decision: {decision!r}")
 
         record.escalation_decisions[unit_id] = outcome
-        write_json_atomic(record.run_dir / "escalation_decisions.json",
-                            record.escalation_decisions)
+        write_json_atomic(
+            record.run_dir / "escalation_decisions.json", record.escalation_decisions
+        )
         return outcome
 
-    def _write_back_escalation(self, record: RunRecord, unit: UnitResult, verified_body: str) -> None:
+    def _write_back_escalation(
+        self, record: RunRecord, unit: UnitResult, verified_body: str
+    ) -> None:
         """Store a human-accepted, oracle-verified repair the same way the
         orchestrator's own repair loop does (O2.5/B6 item 3). Only unit
         diagnostics that named a defect class carry enough information to
@@ -314,14 +350,17 @@ class RunManager:
         if diagnostic is None or diagnostic.defect_class is None:
             return
         classification = Classification(
-            DefectClass(diagnostic.defect_class), diagnostic.confidence or 0.0,
+            DefectClass(diagnostic.defect_class),
+            diagnostic.confidence or 0.0,
             {"delta": diagnostic.delta} if diagnostic.delta is not None else {},
         )
         # The original offending COBOL statement isn't retained on the
         # diagnostic record; the unit identifier is the best available text
         # for the normalized-operation component of the signature at this
         # (post-escalation, human-decision) point.
-        sig = build_signature(classification, field_scale=2, offending_statement=unit.unit_id)
+        sig = build_signature(
+            classification, field_scale=2, offending_statement=unit.unit_id
+        )
         case = MemoryCase(
             case_id=f"{unit.unit_id}-{classification.defect_class.value}-{uuid.uuid4().hex[:8]}",
             signature=sig,
@@ -335,8 +374,8 @@ class RunManager:
             hit_count=0,
             confidence=1.0,
             provenance=f"Written back by RunManager.decide_escalation for run {record.run_id}, "
-                       f"unit {unit.unit_id} (verify_unit compile + differential comparison, "
-                       f"0 divergences, after human decision).",
+            f"unit {unit.unit_id} (verify_unit compile + differential comparison, "
+            f"0 divergences, after human decision).",
         )
         with record.lock:
             record.orchestrator.memory.write_back(case)
@@ -370,7 +409,9 @@ class RunManager:
                     elif "committed" in statuses:
                         record.lifecycle = "PARTIAL"
                     else:
-                        record.lifecycle = "PARTIAL" if orchestrator.results else "FAILED"
+                        record.lifecycle = (
+                            "PARTIAL" if orchestrator.results else "FAILED"
+                        )
             except Exception as exc:  # noqa: BLE001 -- surfaced as run state, never a crash
                 record.lifecycle = "FAILED"
                 record.error = str(exc)
@@ -381,15 +422,24 @@ class RunManager:
     # -- B7: checkpoint / resume --------------------------------------------
 
     def _write_params(self, record: RunRecord, resolved_spec: dict | None) -> None:
-        write_json_atomic(record.params_path, {
-            "request": record.request.model_dump(), "resolved_spec": resolved_spec,
-        })
+        write_json_atomic(
+            record.params_path,
+            {
+                "request": record.request.model_dump(),
+                "resolved_spec": resolved_spec,
+            },
+        )
 
     def _write_lifecycle(self, record: RunRecord) -> None:
-        write_json_atomic(record.lifecycle_path, {
-            "run_id": record.run_id, "lifecycle": record.lifecycle, "error": record.error,
-            "created_at": record.created_at,
-        })
+        write_json_atomic(
+            record.lifecycle_path,
+            {
+                "run_id": record.run_id,
+                "lifecycle": record.lifecycle,
+                "error": record.error,
+                "created_at": record.created_at,
+            },
+        )
 
     def _scan_for_interrupted_runs(self) -> None:
         """On startup, any run left RUNNING with no live process is
@@ -410,7 +460,9 @@ class RunManager:
         incomplete unit. Committed units are not re-verified (§4.5)."""
         record = self.get_run(run_id)
         if record.lifecycle != "INTERRUPTED":
-            raise InvalidRequestError(f"run {run_id} is not interrupted (state={record.lifecycle})")
+            raise InvalidRequestError(
+                f"run {run_id} is not interrupted (state={record.lifecycle})"
+            )
 
         committed_results: dict[str, UnitResult] = {}
         if record.state_path.exists():
@@ -418,19 +470,26 @@ class RunManager:
             for uid, r in saved.items():
                 if r["status"] == "committed":
                     committed_results[uid] = UnitResult(
-                        unit_id=uid, status="committed", final_body=r.get("final_body"),
-                        model_calls=r.get("model_calls", 0), memory_hit=r.get("memory_hit", False),
+                        unit_id=uid,
+                        status="committed",
+                        final_body=r.get("final_body"),
+                        model_calls=r.get("model_calls", 0),
+                        memory_hit=r.get("memory_hit", False),
                         duration_seconds=r.get("duration_seconds", 0.0),
                     )
 
         thread = threading.Thread(
-            target=self._resume_worker, args=(record, committed_results), daemon=True,
+            target=self._resume_worker,
+            args=(record, committed_results),
+            daemon=True,
         )
         record.thread = thread
         thread.start()
         return record
 
-    def _resume_worker(self, record: RunRecord, committed_results: dict[str, UnitResult]) -> None:
+    def _resume_worker(
+        self, record: RunRecord, committed_results: dict[str, UnitResult]
+    ) -> None:
         with self._active_lock:
             record.lifecycle = "RUNNING"
             self._write_lifecycle(record)
@@ -451,7 +510,9 @@ class RunManager:
                 _run_skipping_committed(orchestrator, set(committed_results))
 
                 statuses = {r.status for r in orchestrator.results.values()}
-                record.lifecycle = "COMPLETED" if statuses <= {"committed"} else "PARTIAL"
+                record.lifecycle = (
+                    "COMPLETED" if statuses <= {"committed"} else "PARTIAL"
+                )
             except Exception as exc:  # noqa: BLE001
                 record.lifecycle = "FAILED"
                 record.error = str(exc)
@@ -460,13 +521,18 @@ class RunManager:
                 record.event_bus.close()
 
 
-def _run_skipping_committed(orchestrator: Orchestrator, committed_ids: set[str]) -> None:
+def _run_skipping_committed(
+    orchestrator: Orchestrator, committed_ids: set[str]
+) -> None:
     """Same loop as Orchestrator.run(), but committed units from a prior
     (interrupted) attempt are neither re-synthesised nor re-verified --
     only the checkpointed record is kept."""
     units = orchestrator._plan()
     for unit in units:
-        if orchestrator.cancel_requested is not None and orchestrator.cancel_requested.is_set():
+        if (
+            orchestrator.cancel_requested is not None
+            and orchestrator.cancel_requested.is_set()
+        ):
             break
         if unit.identifier in committed_ids:
             continue

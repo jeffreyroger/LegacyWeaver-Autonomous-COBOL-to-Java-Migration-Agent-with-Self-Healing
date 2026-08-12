@@ -1,5 +1,5 @@
 // Minimal Java syntax highlighter for the synthesized method-body fragments
-// the backend returns (weaver.agent's candidate/committed bodies) -- display
+// the backend returns (zuse.agent's candidate/committed bodies) -- display
 // only, no parsing decisions feed back into anything that affects correctness.
 
 const JAVA_KEYWORDS = new Set([
