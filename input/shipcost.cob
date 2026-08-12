@@ -9,6 +9,7 @@
       * zero (no ROUNDED, T1); deliberately has no signed/trailing-
       * separate field, isolating the compound-condition shape as the
       * only new thing under test (Step U4).
+      * Retrigger: CI migration re-run after Groq/scaffold/output-path fixes.
       *****************************************************************
        IDENTIFICATION DIVISION.
        PROGRAM-ID. SHIPCOST.
