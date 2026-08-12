@@ -45,6 +45,19 @@ final class CobolEdit {
 
         return new String(out) + "." + fracDigits;
     }
+
+    /** Encode value as a COBOL PIC 9(n)-style plain zero-padded unsigned
+     * field -- no sign column, no decimal point. Added 2026-08-12 to close
+     * the gap tieraccum_layout.py originally worked around by dropping the
+     * field instead (floatingSign always reserved a sign byte and always
+     * emitted a decimal point, neither of which a plain PIC 9(n) has). */
+    static String zeroPadded(java.math.BigDecimal value, int width) {
+        String digits = value.setScale(0, java.math.RoundingMode.UNNECESSARY).toBigInteger().toString();
+        while (digits.length() < width) {
+            digits = "0" + digits;
+        }
+        return digits;
+    }
 }
 
 final class AccountRecord {
