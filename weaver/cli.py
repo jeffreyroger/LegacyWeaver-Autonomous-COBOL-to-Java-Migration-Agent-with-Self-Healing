@@ -162,7 +162,7 @@ def _compile_candidate(java_candidate: Path) -> tuple[str, Path]:
 
     if not class_file.exists() or class_file.stat().st_mtime < java_candidate.stat().st_mtime:
         console.print(f"[cyan]Compiling candidate:[/cyan] {java_candidate}")
-        subprocess.run(["javac", "-d", str(build_dir), str(java_candidate)], check=True)
+        subprocess.run(["javac", "-encoding", "UTF-8", "-d", str(build_dir), str(java_candidate)], check=True)
     return main_class, build_dir
 
 

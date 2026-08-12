@@ -57,7 +57,8 @@ def verify_unit(unit_id: str, candidate_body: str, work_dir: Path,
     work_dir.mkdir(parents=True, exist_ok=True)
     src_path.write_text(assembled, encoding="utf-8")
 
-    proc = subprocess.run(["javac", "-d", str(build_dir), str(src_path)], capture_output=True, text=True)
+    proc = subprocess.run(["javac", "-encoding", "UTF-8", "-d", str(build_dir), str(src_path)],
+                           capture_output=True, text=True)
     if proc.returncode != 0:
         return AttributionResult(unit_id, Report(unit_id, 0), [], False, proc.stderr)
 

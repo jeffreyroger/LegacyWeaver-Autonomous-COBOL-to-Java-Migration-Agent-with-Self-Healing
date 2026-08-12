@@ -51,14 +51,33 @@ PROGRAMS=(
   "shipcost:fixtures/cobol_shipcost/shipcost.cob:fixtures/data_shipcost/shipcost.dat:fixtures/data_shipcost/expected/golden_shipcost.out"
 )
 # Known-correct, hand-verified full Java classes (K3 reference implementations)
-# per program -- used to demonstrate a clean (0-divergence) run.
+# per program -- used to demonstrate a clean (0-divergence) run. Only
+# interest/feecalc have a pre-assembled full class committed; the other four
+# ship as a bare scaffold (generated/<p>/Scaffold.java, unsynthesized stubs)
+# plus a separate hand-verified *.body.java fragment -- cmd_verify_all
+# assembles those two into a temp full class via weaver.agent.assemble
+# before verifying, same substitution the orchestrator does per-unit.
 declare -A REFERENCE_CLASS=(
   [interest]="reference/Scaffold.java"
-  [feecalc]="generated/feecalc/Scaffold.java"
+  [feecalc]="reference_feecalc/Scaffold.java"
+)
+declare -A ASSEMBLE_SCAFFOLD=(
   [taxcalc]="generated/taxcalc/Scaffold.java"
   [tieraccum]="generated/tieraccum/Scaffold.java"
   [compound]="generated/compound/Scaffold.java"
   [shipcost]="generated/shipcost/Scaffold.java"
+)
+declare -A ASSEMBLE_BODY=(
+  [taxcalc]="reference_taxcalc/compute_tax.body.java"
+  [tieraccum]="reference_tieraccum/accumulate_tiers.body.java"
+  [compound]="reference_compound/compute_compound.body.java"
+  [shipcost]="reference_shipcost/compute_shipcost.body.java"
+)
+declare -A ASSEMBLE_PARAGRAPH=(
+  [taxcalc]="COMPUTE-TAX"
+  [tieraccum]="ACCUMULATE-TIERS"
+  [compound]="COMPUTE-COMPOUND"
+  [shipcost]="COMPUTE-SHIPCOST"
 )
 
 log()  { printf '\n\033[1;36m==> %s\033[0m\n' "$1"; }
@@ -116,10 +135,23 @@ cmd_verify_all() {
   local fail=0
   for entry in "${PROGRAMS[@]}"; do
     IFS=: read -r name cobol data golden <<< "$entry"
-    ref="${REFERENCE_CLASS[$name]}"
     echo
     echo "--- $name ---"
-    if [ ! -f "$ref" ]; then warn "$ref missing, skipping $name"; continue; fi
+
+    ref="${REFERENCE_CLASS[$name]:-}"
+    if [ -z "$ref" ]; then
+      # No pre-assembled full class for this program -- build one from its
+      # bare scaffold + hand-verified body fragment (same substitution the
+      # orchestrator applies per-unit).
+      local scaffold="${ASSEMBLE_SCAFFOLD[$name]}" body="${ASSEMBLE_BODY[$name]}" para="${ASSEMBLE_PARAGRAPH[$name]}"
+      if [ ! -f "$scaffold" ] || [ ! -f "$body" ]; then
+        warn "$name: missing $scaffold or $body, skipping"; fail=1; continue
+      fi
+      ref="/tmp/weaver-all-assembled/${name}/Scaffold.java"
+      "$PY" -m weaver.agent.assemble "$scaffold" "$body" "$para" "$ref" >/dev/null
+    fi
+
+    if [ ! -f "$ref" ]; then warn "$ref missing, skipping $name"; fail=1; continue; fi
     if "$PY" -m weaver.cli verify "$cobol" "$ref" "$data" --report "report_${name}.json"; then
       echo "$name: verified clean"
     else

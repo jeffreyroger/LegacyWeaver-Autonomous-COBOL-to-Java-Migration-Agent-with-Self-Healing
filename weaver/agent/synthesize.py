@@ -90,7 +90,7 @@ def assemble_and_compile(scaffold_path: Path, paragraph_id: str, body: str,
 
     build_dir.mkdir(parents=True, exist_ok=True)
     proc = subprocess.run(
-        ["javac", "-d", str(build_dir), str(out_path)],
+        ["javac", "-encoding", "UTF-8", "-d", str(build_dir), str(out_path)],
         capture_output=True, text=True,
     )
     if proc.returncode == 0:

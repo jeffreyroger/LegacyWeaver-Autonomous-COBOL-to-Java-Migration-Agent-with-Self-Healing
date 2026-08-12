@@ -36,7 +36,7 @@ class ComparisonRow:
 def naive_baseline_row() -> ComparisonRow:
     build_dir = Path("generated/baseline_build")
     build_dir.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["javac", "-d", str(build_dir), "baseline/Baseline.java"], check=True)
+    subprocess.run(["javac", "-encoding", "UTF-8", "-d", str(build_dir), "baseline/Baseline.java"], check=True)
     report, _ = verify_candidate("Baseline", build_dir)
     return ComparisonRow(
         "Naive single-shot translation (baseline/Baseline.java)",
