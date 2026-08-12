@@ -109,4 +109,4 @@
            MOVE WS-INTEREST TO RL-INTEREST
            MOVE AR-DORMANT  TO RL-DORMANT
            WRITE REPORT-LINE.
-      * touched to retrigger CI after pathspec fix
+      * touched to retrigger CI with debug error output

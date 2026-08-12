@@ -149,7 +149,8 @@ class InferenceClient:
             headers={"Authorization": f"Bearer {api_key}"},
             timeout=180,
         )
-        resp.raise_for_status()
+        if not resp.ok:
+            raise RuntimeError(f"Groq request failed ({resp.status_code}): {resp.text}")
         data = resp.json()
         choice = data["choices"][0]
         usage = data.get("usage", {})
