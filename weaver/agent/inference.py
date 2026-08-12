@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -40,6 +42,27 @@ NUM_PREDICT = 768
 # completion and structured-output validation failed. Kept separate so this
 # doesn't perturb the Ollama-path cache key or its determinism pin (J2).
 GROQ_MAX_TOKENS = 4096
+# Groq's free tier caps tokens-per-minute org-wide; a repair-loop unit can
+# make several synthesis calls in quick succession and exceed it well
+# within a single migrate run (found 2026-08-12: shipcost.cob's repair
+# loop hit 429 on its second call). Groq's own 429 body names the exact
+# cooldown ("Please try again in 19.4s") -- wait that out and retry rather
+# than aborting the whole run.
+GROQ_MAX_RETRIES = 3
+_RETRY_AFTER_RE = re.compile(r"try again in ([\d.]+)s")
+
+
+def _groq_retry_delay(resp: "requests.Response") -> float:
+    header = resp.headers.get("Retry-After")
+    if header is not None:
+        try:
+            return float(header)
+        except ValueError:
+            pass
+    match = _RETRY_AFTER_RE.search(resp.text)
+    if match:
+        return float(match.group(1))
+    return 5.0
 
 
 class OfflineViolationError(RuntimeError):
@@ -160,12 +183,17 @@ class InferenceClient:
                     "strict": True,
                 },
             }
-        resp = requests.post(
-            f"{self.host}/chat/completions",
-            json=body,
-            headers={"Authorization": f"Bearer {api_key}"},
-            timeout=180,
-        )
+        resp = None
+        for attempt in range(GROQ_MAX_RETRIES + 1):
+            resp = requests.post(
+                f"{self.host}/chat/completions",
+                json=body,
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=180,
+            )
+            if resp.status_code != 429 or attempt == GROQ_MAX_RETRIES:
+                break
+            time.sleep(_groq_retry_delay(resp) + 0.5)
         if not resp.ok:
             raise RuntimeError(f"Groq request failed ({resp.status_code}): {resp.text}")
         data = resp.json()
