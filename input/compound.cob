@@ -11,6 +11,7 @@
       * wrong branch taken. Still truncates toward zero at every step
       * (no ROUNDED, T1) and reads a SIGN TRAILING SEPARATE numeric
       * field (T6).
+      * Retrigger: workflow no longer stops the loop when one program fails or escalates -- refiring so all six promoted programs actually run.
       *****************************************************************
        IDENTIFICATION DIVISION.
        PROGRAM-ID. COMPOUND.

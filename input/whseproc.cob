@@ -17,6 +17,7 @@
       *   - order total = (quantity * unit price) - discount, truncated
       *     (no ROUNDED clause -- COBOL's default truncates toward
       *     zero, unlike a naive Java translation).
+      * Retrigger: workflow no longer stops the loop when one program fails or escalates -- refiring so all six promoted programs actually run.
       *****************************************************************
        IDENTIFICATION DIVISION.
        PROGRAM-ID. WHSEPROC.

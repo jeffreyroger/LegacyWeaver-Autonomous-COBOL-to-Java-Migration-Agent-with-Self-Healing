@@ -27,6 +27,7 @@
       *     emits BigDecimal fields exclusively, so an alphanumeric
       *     "OK "/"NSF" status field has nowhere to be stored).
       *   - withdrawal within balance: balance decreases.
+      * Retrigger: workflow no longer stops the loop when one program fails or escalates -- refiring so all six promoted programs actually run.
       *****************************************************************
        IDENTIFICATION DIVISION.
        PROGRAM-ID. BANKPROC.

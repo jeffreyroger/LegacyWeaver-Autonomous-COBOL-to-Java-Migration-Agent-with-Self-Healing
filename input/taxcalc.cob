@@ -10,6 +10,7 @@
       * shape -- the same "structurally similar, superficially
       * different" property FEECALC was built for (S1), applied to
       * control flow instead of arithmetic.
+      * Retrigger: workflow no longer stops the loop when one program fails or escalates -- refiring so all six promoted programs actually run.
       *****************************************************************
        IDENTIFICATION DIVISION.
        PROGRAM-ID. TAXCALC.

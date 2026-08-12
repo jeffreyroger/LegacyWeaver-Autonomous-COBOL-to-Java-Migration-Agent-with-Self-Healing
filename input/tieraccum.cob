@@ -14,6 +14,7 @@
       * UR-BASE * 0.10 / unit-number, truncated, to a per-record
       * accumulator; the running report total is the sum of those
       * per-record accumulators.
+      * Retrigger: workflow no longer stops the loop when one program fails or escalates -- refiring so all six promoted programs actually run.
       *****************************************************************
        IDENTIFICATION DIVISION.
        PROGRAM-ID. TIERACCUM.

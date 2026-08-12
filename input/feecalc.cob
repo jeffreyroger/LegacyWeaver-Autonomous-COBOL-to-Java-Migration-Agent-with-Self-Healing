@@ -12,6 +12,7 @@
       * interest.cob's AR-RATE -- deliberately different arithmetic
       * shape (single MULTIPLY, no DIVIDE) so this is not a copy-paste
       * of interest.cob.
+      * Retrigger: workflow no longer stops the loop when one program fails or escalates -- refiring so all six promoted programs actually run.
       *****************************************************************
        IDENTIFICATION DIVISION.
        PROGRAM-ID. FEECALC.
