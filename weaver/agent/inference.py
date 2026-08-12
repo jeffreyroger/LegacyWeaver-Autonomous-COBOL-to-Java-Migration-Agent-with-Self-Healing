@@ -27,7 +27,7 @@ OLLAMA_HOST = "http://127.0.0.1:11434"  # loopback only -- J1 offline requiremen
 GROQ_HOST = "https://api.groq.com/openai/v1"
 DEFAULT_MODEL = "qwen2.5-coder:7b"
 FALLBACK_MODEL = "qwen2.5-coder:3b"
-GROQ_DEFAULT_MODEL = "qwen/qwen3.6-27b"  # per console.groq.com/docs/models -- confirmed 2026-08-12
+GROQ_DEFAULT_MODEL = "openai/gpt-oss-20b"  # only models with Structured Outputs support (console.groq.com/docs/structured-outputs)
 SEED = 42
 TEMPERATURE = 0.0
 TOP_P = 1.0
@@ -149,6 +149,7 @@ class InferenceClient:
                 "json_schema": {
                     "name": "synthesis_response",
                     "schema": schema,
+                    "strict": True,
                 },
             }
         resp = requests.post(
