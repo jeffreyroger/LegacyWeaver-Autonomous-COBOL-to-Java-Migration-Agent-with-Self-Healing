@@ -1,0 +1,104 @@
+name: Migrate COBOL to Java
+
+# CLAUDE.md rule 10 scoped exception: this workflow is the only place that
+# calls a hosted inference API (Groq). Local/CLI/backend/frontend usage is
+# untouched and stays fully offline against a local Ollama daemon.
+
+on:
+  push:
+    paths:
+      - "input/**/*.cob"
+      - "input/**/*.cbl"
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+
+      - name: Detect changed COBOL files
+        id: changed
+        run: |
+          if git rev-parse HEAD^ >/dev/null 2>&1; then
+            base=HEAD^
+          else
+            base=$(git hash-object -t tree /dev/null)
+          fi
+          files=$(git diff --name-only "$base" HEAD -- 'input/*.cob' 'input/**/*.cob' 'input/*.cbl' 'input/**/*.cbl' | tr '\n' ' ')
+          echo "files=$files" >> "$GITHUB_OUTPUT"
+          echo "Changed COBOL files: $files"
+
+      - name: Set up Python
+        if: steps.changed.outputs.files != ''
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Set up JDK
+        if: steps.changed.outputs.files != ''
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install GnuCOBOL 3.x
+        if: steps.changed.outputs.files != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gnucobol3 || sudo apt-get install -y gnucobol
+          cobc --version | head -n1
+
+      - name: Install weaver
+        if: steps.changed.outputs.files != ''
+        run: pip install -e .
+
+      - name: Migrate and verify each changed program
+        if: steps.changed.outputs.files != ''
+        env:
+          WEAVER_INFERENCE_PROVIDER: groq
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          FILES: ${{ steps.changed.outputs.files }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -e
+          mkdir -p output
+          for f in $FILES; do
+            case "$f" in
+              *[!A-Za-z0-9_./-]*|*'..'*)
+                echo "::error::rejecting unsafe path: $f"
+                exit 1
+                ;;
+              input/*.cob|input/*.cbl|input/*/*.cob|input/*/*.cbl) ;;
+              *)
+                echo "::error::rejecting path outside input/: $f"
+                exit 1
+                ;;
+            esac
+            echo "::group::Migrating $f"
+            copybook_dir="input/copybooks"
+            run_dir="runs/ci-$(basename "$f" | sed 's/\.[^.]*$//')-${RUN_ID}"
+            weaver migrate "$f" \
+              --copybook "$copybook_dir" \
+              --out output \
+              --run-dir "$run_dir" \
+              --json
+            echo "::endgroup::"
+          done
+
+      - name: Commit generated Java to output/
+        if: steps.changed.outputs.files != ''
+        uses: stefanzweifel/git-auto-commit-action@4a55954c782fc1ea30b9056cd3e7a2b40ca8887d # v7.2.0
+        env:
+          FILES: ${{ steps.changed.outputs.files }}
+          RUN_ID: ${{ github.run_id }}
+        with:
+          commit_message: "ci: migrate COBOL to Java for ${{ env.FILES }} (run ${{ env.RUN_ID }})"
+          file_pattern: "output/**"
+          commit_user_name: "github-actions[bot]"
+          commit_user_email: "github-actions[bot]@users.noreply.github.com"

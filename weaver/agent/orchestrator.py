@@ -21,14 +21,16 @@ from pathlib import Path
 
 import uuid
 
+from weaver.agent.assemble import assemble
 from weaver.agent.attribution import verify_unit
 from weaver.agent.escalation import DiagnosticRecord, build_diagnostic_record
-from weaver.agent.inference import InferenceClient
+from weaver.agent.inference import GROQ_HOST, InferenceClient
 from weaver.agent.memory import FailureMemory, MemoryCase, embed
 from weaver.agent.memory_repair import try_memory_repair
 from weaver.agent.repair_loop import repair_unit
 from weaver.agent.runspec import RunSpec
 from weaver.agent.scaffold import field_scale as scaffold_field_scale
+from weaver.agent.scaffold import generate as generate_scaffold
 from weaver.agent.segment import Paragraph, segment
 from weaver.agent.signature import build_signature
 from weaver.agent.synthesize import SynthesisResult, synthesize_paragraph
@@ -59,6 +61,7 @@ class Orchestrator:
     trace_path: Path = TRACE_PATH
     state_path: Path = STATE_PATH
     results: dict[str, UnitResult] = field(default_factory=dict)
+    output_path: Path | None = field(default=None, init=False)  # set by run() -- see _write_output
     on_event: Callable[[dict], None] | None = None
     cancel_requested: threading.Event | None = None
     fresh_trace: bool = True
@@ -75,15 +78,33 @@ class Orchestrator:
         return self.spec.cobol_source
 
     def __post_init__(self) -> None:
+        # Rule 9 (Phase V): the scaffold is derived data from scaffold_spec,
+        # not a hand-committed artefact -- regenerate it unconditionally so
+        # `weaver migrate`/the backend work for any program, not only
+        # interest.cob (whose generated/Scaffold.java happens to be checked
+        # in). Deterministic from scaffold_spec, so this never changes
+        # behaviour for a program whose scaffold was already on disk.
+        self.spec.scaffold_path.parent.mkdir(parents=True, exist_ok=True)
+        self.spec.scaffold_path.write_text(generate_scaffold(self.spec.scaffold_spec), encoding="utf-8")
+
         self.trace_path.parent.mkdir(parents=True, exist_ok=True)
         if self.fresh_trace:
             self.trace_path.write_text("", encoding="utf-8")  # fresh trace per run
         else:
             self.trace_path.touch(exist_ok=True)  # resume: append, never truncate
-        self.client = InferenceClient(
-            cache_dir=Path("generated/model_cache"),
-            replay_only=self.spec.replay,
-        )
+        # CI-only override (CLAUDE.md rule 10 scoped exception): the
+        # GitHub Action sets WEAVER_INFERENCE_PROVIDER=groq because runners
+        # have no local Ollama daemon. Local/CLI/backend/frontend runs never
+        # set this and stay on the offline "ollama" default.
+        provider = os.environ.get("WEAVER_INFERENCE_PROVIDER", "ollama")
+        client_kwargs: dict = {
+            "cache_dir": Path("generated/model_cache"),
+            "replay_only": self.spec.replay,
+            "provider": provider,
+        }
+        if provider == "groq":
+            client_kwargs["host"] = GROQ_HOST
+        self.client = InferenceClient(**client_kwargs)
         self.memory = FailureMemory(self.spec.memory_store_path)
 
     def _emit(self, unit_id: str, node: str, action: str, duration: float,
@@ -273,7 +294,33 @@ class Orchestrator:
                 self.results[unit.identifier] = result
             # Checkpoint after commit/escalate (both terminal), never before.
             self._persist_state()
+        self.output_path = self._write_output()
         return self.results
+
+    def _write_output(self) -> Path | None:
+        """Write the fully-assembled migrated program to spec.out_dir --
+        SRS SS3.9.1's `--out` flag, accepted since RunSpec existed but never
+        actually consumed anywhere (the same "accepted, never read" defect
+        class as CLAUDE.md rule 13; found 2026-08-12 when a real CI run
+        left `output/` with only its `.gitkeep`).
+
+        Only written once every unit has a verified, committed body --
+        never a partial program with an escalated unit's stub left in
+        place, which would be a confident wrong answer. Namespaced by the
+        COBOL source's stem so multiple programs migrated into the same
+        --out directory (as the CI workflow does, looping several changed
+        files through one `--out output`) don't overwrite each other.
+        """
+        if self.spec.out_dir is None:
+            return None
+        if not self.results or any(r.status != "committed" for r in self.results.values()):
+            return None
+        bodies = {unit_id: r.final_body for unit_id, r in self.results.items()}
+        assembled = assemble(self.spec.scaffold_path.read_text(encoding="utf-8"), bodies)
+        out_path = self.spec.out_dir / self.spec.cobol_source.stem / "Scaffold.java"
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(assembled, encoding="utf-8")
+        return out_path
 
     def _persist_state(self) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)

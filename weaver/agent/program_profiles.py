@@ -76,6 +76,12 @@ _PROGRAM_PATHS: dict[str, ProgramPaths] = {
         Path("reference_shipcost"),
         Path("fixtures/data_shipcost"),
     ),
+    "handlfee.cob": ProgramPaths(
+        Path("generated/handlfee/Scaffold.java"),
+        Path("fixtures/data_handlfee/expected/golden_handlfee.out"),
+        Path("reference_handlfee"),
+        Path("fixtures/data_handlfee"),
+    ),
     # interest.cob is deliberately absent: its paths are RunSpec's defaults.
     "asdf.cob": ProgramPaths(
         Path("generated/whseproc/Scaffold.java"),

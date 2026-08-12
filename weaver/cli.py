@@ -381,10 +381,13 @@ def run_migrate(args: argparse.Namespace) -> int:
         print(json.dumps({
             "run_dir": str(run_dir),
             "units": {uid: dataclasses.asdict(r) for uid, r in results.items()},
+            "output_path": str(orchestrator.output_path) if orchestrator.output_path else None,
             "exit_code": exit_code,
         }, indent=2, default=str))
     else:
         _render_migrate_summary(run_dir, results)
+        if orchestrator.output_path:
+            console.print(f"[green]Migrated Java written to {orchestrator.output_path}[/green]")
 
     return exit_code
 

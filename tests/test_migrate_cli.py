@@ -61,6 +61,7 @@ def test_migrate_writes_an_fr_8_1_run_dir(tmp_path, monkeypatch):
             self.trace_path = kwargs["trace_path"]
             self.state_path = kwargs["state_path"]
             self.results = {}
+            self.output_path = None
 
         def run(self):
             self.trace_path.parent.mkdir(parents=True, exist_ok=True)
@@ -93,6 +94,7 @@ def test_migrate_params_json_records_every_spec_field(tmp_path, monkeypatch):
             self.trace_path = kwargs["trace_path"]
             self.state_path = kwargs["state_path"]
             self.results = {}
+            self.output_path = None
 
         def run(self):
             self.trace_path.parent.mkdir(parents=True, exist_ok=True)
@@ -122,6 +124,7 @@ def test_migrate_exit_code_1_when_a_unit_escalates(tmp_path, monkeypatch):
             self.trace_path = kwargs["trace_path"]
             self.state_path = kwargs["state_path"]
             self.results = {}
+            self.output_path = None
 
         def run(self):
             self.trace_path.parent.mkdir(parents=True, exist_ok=True)
