@@ -109,4 +109,4 @@
            MOVE WS-INTEREST TO RL-INTEREST
            MOVE AR-DORMANT  TO RL-DORMANT
            WRITE REPORT-LINE.
-      * touched to retrigger CI with security fixes + correct model id
+      * touched to retrigger CI with json_schema response_format fix

@@ -142,7 +142,15 @@ class InferenceClient:
             "max_tokens": NUM_PREDICT,
         }
         if request.schema is not None:
-            body["response_format"] = {"type": "json_object"}
+            schema = dict(request.schema)
+            schema.setdefault("additionalProperties", False)
+            body["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "synthesis_response",
+                    "schema": schema,
+                },
+            }
         resp = requests.post(
             f"{self.host}/chat/completions",
             json=body,
