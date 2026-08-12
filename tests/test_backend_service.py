@@ -243,6 +243,74 @@ def test_get_run_includes_diagnostic_for_escalated_unit(client, monkeypatch):
     assert unit["diagnostic"]["attempts"][0]["patch_summary"] == "x"
 
 
+def test_escalation_decision_verifies_against_the_run_own_spec(client, monkeypatch):
+    """Regression: decide_escalation used to call verify_unit(unit_id,
+    candidate_body, work_dir) with no `spec=`, so it silently verified
+    against RunSpec.default() (the interest.cob demo scaffold) no matter
+    which program the run was actually for. For any other program (e.g.
+    feecalc.cob, whose scaffold has no markers for its own paragraph ids)
+    assemble() raised UnknownParagraphError, an unhandled exception that
+    surfaced as a bare 500 instead of a typed error. Asserts verify_unit
+    is called with the run's own resolved spec, not the default one."""
+    from weaver.agent.attribution import AttributionResult
+    from weaver.agent.escalation import DiagnosticRecord
+    from weaver.report import Report
+
+    class FakeMemory:
+        def __init__(self):
+            self.written_back = []
+
+        def write_back(self, case):
+            self.written_back.append(case)
+
+    @dataclass
+    class FakeOrchestratorEscalates(FakeOrchestrator):
+        def __post_init__(self):
+            super().__post_init__()
+            self.memory = FakeMemory()
+
+        def run(self):
+            self._emit("*", "plan", "select_units", 0.0, outcome="units=['UNIT-A']")
+            diag = DiagnosticRecord(
+                unit_identifier="UNIT-A", failing_input_record="rec", oracle_value="1.00",
+                candidate_value="2.00", delta="1.00", defect_class="TRUNCATION", confidence=0.9,
+                attempts=[{"attempt": 1, "patch_summary": "x", "why_it_failed": "y"}],
+                assumptions=["a"], suspected_source_lines="1-2", decision_requested="accept?",
+            )
+            self.results["UNIT-A"] = UnitResult("UNIT-A", "escalated", "final body", 1, False, 0.02, diag)
+            self._persist_state()
+            return self.results
+
+    monkeypatch.setattr(runs_module, "Orchestrator", FakeOrchestratorEscalates)
+
+    seen_specs = []
+
+    def fake_verify_unit(unit_id, candidate_body, work_dir, *, spec=None):
+        seen_specs.append(spec)
+        return AttributionResult(unit_id, Report(unit_id, 1, divergence_count=0), [], True, None)
+
+    monkeypatch.setattr(runs_module, "verify_unit", fake_verify_unit)
+
+    resp = client.post("/runs", json=_create_payload(
+        cobol_source="fixtures/cobol_feecalc/feecalc.cob", data_file="fixtures/data_feecalc/fees.dat",
+    ))
+    run_id = resp.json()["run_id"]
+    _wait_terminal(client, run_id)
+
+    decision_resp = client.post(
+        f"/runs/{run_id}/escalations/UNIT-A/decision", json={"decision": "accept"}
+    )
+    assert decision_resp.status_code == 200
+    assert decision_resp.json()["verified"] is True
+
+    from backend.app import run_manager
+    record = run_manager.get_run(run_id)
+    assert len(seen_specs) == 1
+    assert seen_specs[0] is record.orchestrator.spec
+    assert seen_specs[0] != RunSpec.default()
+    assert "feecalc" in str(seen_specs[0].scaffold_path)
+
+
 def test_get_run_diagnostic_is_null_for_committed_unit(client):
     resp = client.post("/runs", json=_create_payload())
     run_id = resp.json()["run_id"]

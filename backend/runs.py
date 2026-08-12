@@ -270,7 +270,16 @@ class RunManager:
             if not candidate_body:
                 raise InvalidRequestError("no body available to verify for this decision")
             work_dir = record.run_dir / "escalations" / unit_id
-            result = verify_unit(unit_id, candidate_body, work_dir)
+            # verify_unit defaults to RunSpec.default() (the interest.cob
+            # demo scaffold) when spec is omitted -- for any other program
+            # (e.g. handlfee.cob) its scaffold has no markers for this
+            # unit_id, so assemble() raises UnknownParagraphError, an
+            # unhandled exception that fell through to a bare 500 instead
+            # of a typed error. record.orchestrator is guaranteed non-None
+            # here: `unit` above came from list_units(), which returns []
+            # when orchestrator is None, and we'd have raised
+            # InvalidRequestError before reaching this line in that case.
+            result = verify_unit(unit_id, candidate_body, work_dir, spec=record.orchestrator.spec)
             verified = result.compiled and result.report.divergence_count == 0
             if verified:
                 with record.lock:
