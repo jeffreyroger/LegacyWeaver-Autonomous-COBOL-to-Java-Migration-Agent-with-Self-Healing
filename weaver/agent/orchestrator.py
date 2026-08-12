@@ -29,6 +29,7 @@ from weaver.agent.memory_repair import try_memory_repair
 from weaver.agent.repair_loop import repair_unit
 from weaver.agent.runspec import RunSpec
 from weaver.agent.scaffold import field_scale as scaffold_field_scale
+from weaver.agent.scaffold import generate as generate_scaffold
 from weaver.agent.segment import Paragraph, segment
 from weaver.agent.signature import build_signature
 from weaver.agent.synthesize import SynthesisResult, synthesize_paragraph
@@ -75,6 +76,15 @@ class Orchestrator:
         return self.spec.cobol_source
 
     def __post_init__(self) -> None:
+        # Rule 9 (Phase V): the scaffold is derived data from scaffold_spec,
+        # not a hand-committed artefact -- regenerate it unconditionally so
+        # `weaver migrate`/the backend work for any program, not only
+        # interest.cob (whose generated/Scaffold.java happens to be checked
+        # in). Deterministic from scaffold_spec, so this never changes
+        # behaviour for a program whose scaffold was already on disk.
+        self.spec.scaffold_path.parent.mkdir(parents=True, exist_ok=True)
+        self.spec.scaffold_path.write_text(generate_scaffold(self.spec.scaffold_spec), encoding="utf-8")
+
         self.trace_path.parent.mkdir(parents=True, exist_ok=True)
         if self.fresh_trace:
             self.trace_path.write_text("", encoding="utf-8")  # fresh trace per run
