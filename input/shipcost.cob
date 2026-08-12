@@ -9,7 +9,7 @@
       * zero (no ROUNDED, T1); deliberately has no signed/trailing-
       * separate field, isolating the compound-condition shape as the
       * only new thing under test (Step U4).
-      * Retrigger: CI migration re-run after Groq/scaffold/output-path fixes.
+      * Retry: prior CI run hit Groq's free-tier TPM rate limit, not a bug.
       *****************************************************************
        IDENTIFICATION DIVISION.
        PROGRAM-ID. SHIPCOST.
