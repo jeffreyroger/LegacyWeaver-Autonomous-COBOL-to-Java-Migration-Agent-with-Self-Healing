@@ -63,13 +63,26 @@ jobs:
         env:
           WEAVER_INFERENCE_PROVIDER: groq
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          FILES: ${{ steps.changed.outputs.files }}
+          RUN_ID: ${{ github.run_id }}
         run: |
           set -e
           mkdir -p output
-          for f in ${{ steps.changed.outputs.files }}; do
+          for f in $FILES; do
+            case "$f" in
+              *[!A-Za-z0-9_./-]*|*'..'*)
+                echo "::error::rejecting unsafe path: $f"
+                exit 1
+                ;;
+              input/*.cob|input/*.cbl|input/*/*.cob|input/*/*.cbl) ;;
+              *)
+                echo "::error::rejecting path outside input/: $f"
+                exit 1
+                ;;
+            esac
             echo "::group::Migrating $f"
             copybook_dir="input/copybooks"
-            run_dir="runs/ci-$(basename "$f" | sed 's/\.[^.]*$//')-${{ github.run_id }}"
+            run_dir="runs/ci-$(basename "$f" | sed 's/\.[^.]*$//')-${RUN_ID}"
             weaver migrate "$f" \
               --copybook "$copybook_dir" \
               --out output \
@@ -80,9 +93,12 @@ jobs:
 
       - name: Commit generated Java to output/
         if: steps.changed.outputs.files != ''
-        uses: stefanzweifel/git-auto-commit-action@v5
+        uses: stefanzweifel/git-auto-commit-action@b863ae1933cb653a53c021fe36dbb774e1fb9403 # v5.0.1
+        env:
+          FILES: ${{ steps.changed.outputs.files }}
+          RUN_ID: ${{ github.run_id }}
         with:
-          commit_message: "ci: migrate COBOL to Java for ${{ steps.changed.outputs.files }} (run ${{ github.run_id }})"
+          commit_message: "ci: migrate COBOL to Java for ${{ env.FILES }} (run ${{ env.RUN_ID }})"
           file_pattern: "output/**"
           commit_user_name: "github-actions[bot]"
           commit_user_email: "github-actions[bot]@users.noreply.github.com"
