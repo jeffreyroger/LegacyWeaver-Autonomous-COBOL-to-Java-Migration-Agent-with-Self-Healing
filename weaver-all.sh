@@ -197,13 +197,70 @@ cmd_demo() {
   cmd_verify_baseline
   cmd_verify_selfcheck
   cmd_verify_all
-  cmd_test
+  cmd_test || warn "test suite reported a failure -- see output above"
   log "Demo sequence complete."
+}
+
+banner() { printf '\n\033[1;35m########## %s ##########\033[0m\n' "$1"; }
+
+cmd_showcase() {
+  # One command, every implemented feature, in the order a demo would
+  # present them. `migrate`/`report` only run live if Ollama answers --
+  # everything else is unconditional. `backend` is a long-running server
+  # so it's described, not launched, at the end (it would block the script).
+  banner "1/8 Toolchain check"
+  cmd_toolcheck
+
+  banner "2/8 Deterministic fixture generation (FR-4)"
+  cmd_generate_data
+
+  banner "3/8 Baseline divergence -- unconstrained translation is silently wrong (FR-7)"
+  cmd_verify_baseline
+
+  banner "4/8 Self-check -- zero false positives (AC-9/FR-12)"
+  cmd_verify_selfcheck
+
+  banner "5/8 Verification across all 6 fixture programs (Phase U)"
+  cmd_verify_all
+
+  banner "6/8 Test suite"
+  cmd_test || warn "test suite reported a failure -- continuing showcase (see output above for which test)"
+
+  banner "7/8 Autonomous migration (synthesis + repair loop + failure memory)"
+  if _ollama_reachable; then
+    cmd_migrate fixtures/cobol/interest.cob
+    echo
+    cmd_report
+  else
+    warn "Ollama not reachable at 127.0.0.1:11434 -- skipping live migrate/report."
+    warn "Start it ('ollama serve', with qwen2.5-coder:7b + nomic-embed-text pulled) and re-run,"
+    warn "or run: bash weaver-all.sh migrate-replay   (cached responses, no live inference)"
+  fi
+
+  banner "8/8 Local run service"
+  echo "Not started automatically -- it's a long-running server. To try it:"
+  echo "  bash weaver-all.sh backend"
+  echo "then, in another terminal: curl http://127.0.0.1:8420/health"
+
+  banner "Showcase complete"
+  echo "Reports written: report.json (baseline), report_selfcheck.json, report_<program>.json (verify-all)."
+  [ -d runs ] && echo "Migration run artifacts: runs/<run_id>/ (params.json, trace.jsonl, orchestrator_state.json)."
+}
+
+_ollama_reachable() {
+  command -v ollama >/dev/null 2>&1 || return 1
+  "$PY" - <<'EOF' >/dev/null 2>&1
+import requests
+requests.get("http://127.0.0.1:11434/api/tags", timeout=2).raise_for_status()
+EOF
 }
 
 usage() {
   cat <<EOF
 LegacyWeaver -- single entry point
+
+  showcase           *** run every implemented feature, start to finish ***
+  menu               interactive menu (pick one command at a time)
 
   setup              create .venv and install all dependencies
   toolcheck          report cobc/javac/python/ollama availability
@@ -249,13 +306,17 @@ dispatch() {
     report) shift; cmd_report "${1:-}" ;;
     backend) shift; cmd_backend "${1:-}" ;;
     demo) cmd_demo ;;
+    showcase) cmd_showcase ;;
+    menu) menu ;;
     help|-h|--help) usage ;;
     *) warn "unknown command: $1"; usage; exit 1 ;;
   esac
 }
 
+# No args -> run the full showcase directly (this script's whole point is
+# "one command, every feature"). Use `menu` explicitly for the picker.
 if [ "$#" -eq 0 ]; then
-  menu
+  cmd_showcase
 else
   dispatch "$@"
 fi
