@@ -141,8 +141,24 @@ call names DOWN explicitly, and the condition is read through its boolean
 accessor, never a string comparison.
 """
 
+def _join_and(items: list[str]) -> str:
+    """['a', 'b'] -> 'a and b'; ['a', 'b', 'c'] -> 'a, b and c'.
+
+    The S1 generalization replaced the hand-written "and" with a plain
+    ", ".join, which changed a reviewed prompt sentence incidentally rather
+    than deliberately. The prompt is hashed into the model cache key (J4),
+    so its wording is a behavioural input, not formatting -- restored here
+    and pinned by tests/test_cobol_frontend.py.
+    """
+    if len(items) <= 1:
+        return "".join(items)
+    return ", ".join(items[:-1]) + " and " + items[-1]
+
+
 def _prohibitions(spec: ScaffoldSpec) -> str:
-    settable = ", ".join(f"ws.{a.split('.')[-1]}" for a in sorted(ws_accessors(spec).values())) or "(none)"
+    settable = _join_and(
+        [f"ws.{a.split('.')[-1]}" for a in sorted(ws_accessors(spec).values())]
+    ) or "(none)"
     return f"""\
 Prohibitions -- the returned body must not:
 - declare or reference any field not listed in the field table below
