@@ -33,6 +33,13 @@ TEMPERATURE = 0.0
 TOP_P = 1.0
 NUM_CTX = 4096
 NUM_PREDICT = 768
+# gpt-oss-20b is a reasoning model on Groq: hidden chain-of-thought tokens
+# count against max_tokens before the visible JSON answer does. NUM_PREDICT
+# is tuned for the local, non-reasoning Ollama model and is too small here --
+# reusing it left no room for the answer, so Groq returned an empty
+# completion and structured-output validation failed. Kept separate so this
+# doesn't perturb the Ollama-path cache key or its determinism pin (J2).
+GROQ_MAX_TOKENS = 4096
 
 
 class OfflineViolationError(RuntimeError):
@@ -139,7 +146,8 @@ class InferenceClient:
             "seed": request.seed,
             "temperature": TEMPERATURE,
             "top_p": TOP_P,
-            "max_tokens": NUM_PREDICT,
+            "max_tokens": GROQ_MAX_TOKENS,
+            "reasoning_effort": "low",
         }
         if request.schema is not None:
             schema = dict(request.schema)
