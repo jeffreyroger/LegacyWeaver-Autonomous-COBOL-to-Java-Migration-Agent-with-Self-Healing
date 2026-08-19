@@ -80,24 +80,10 @@ class ProgramGraph:
         cycle has no leaf, so it is collapsed into one composite unit
         (all remaining un-orderable nodes) and flagged by its length > 1,
         per FR-2.2's explicit wording."""
-        dependents: dict[str, set[str]] = {p: set() for p in self.paragraphs}
-        for e in self.performs:
-            dependents[e.source].add(e.target)  # source depends on target
+        from weaver.agent._toposort import topological_order as _topo
 
-        remaining = set(self.paragraphs)
-        order: list[list[str]] = []
-        while remaining:
-            leaves = sorted(p for p in remaining if not (dependents[p] & remaining))
-            if not leaves:
-                # Every remaining node has an unresolved dependency inside
-                # `remaining` itself -- a cycle. Collapse the rest as one
-                # composite, flagged by having more than one member.
-                order.append(sorted(remaining))
-                break
-            for leaf in leaves:
-                order.append([leaf])
-            remaining -= set(leaves)
-        return order
+        edges = [(e.source, e.target) for e in self.performs]
+        return _topo(list(self.paragraphs), edges)
 
     def to_dict(self) -> dict:
         return {
