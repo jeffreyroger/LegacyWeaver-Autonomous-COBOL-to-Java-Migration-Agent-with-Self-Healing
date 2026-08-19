@@ -28,12 +28,14 @@ from weaver.agent.inference import GROQ_HOST, InferenceClient
 from weaver.agent.memory import FailureMemory, MemoryCase, embed
 from weaver.agent.memory_repair import try_memory_repair
 from weaver.agent.repair_loop import repair_unit
+from weaver.agent.replay_verify import verify_unit_from_cache
 from weaver.agent.runspec import RunSpec
 from weaver.agent.scaffold import field_scale as scaffold_field_scale
 from weaver.agent.scaffold import generate as generate_scaffold
 from weaver.agent.segment import Paragraph, segment
 from weaver.agent.signature import build_signature
 from weaver.agent.synthesize import SynthesisResult, synthesize_paragraph
+from weaver.agent.unit_cache import load_valid as load_valid_unit_cache
 from weaver.agent.validate import SynthesizedBody
 from weaver.atomic_json import write_json_atomic
 from weaver.report import Report
@@ -172,12 +174,32 @@ class Orchestrator:
 
         body = synth.body.method_body
 
-        # compile + verify (attribution)
+        # compile + verify -- GRAPH_PLAN.md M8: try the unit-cache fast path
+        # first (proven equivalent to attribution.verify_unit by M7's live
+        # tests), falling back to the real whole-program verify on any
+        # cache miss or stale key (AC-17) -- never silently. Disabled by
+        # default (RunSpec.use_unit_cache=False), so an existing run's
+        # outcome is byte-for-byte unaffected unless explicitly opted in.
         t0 = time.monotonic()
-        result = verify_unit(unit.identifier, body, Path(f"generated/orchestrator/{unit.identifier}/synthesis"),
-                              spec=self.spec)
-        self._emit(unit.identifier, "compile", "javac", time.monotonic() - t0,
-                    outcome="ok" if result.compiled else "compile_error")
+        cache = None
+        if self.spec.use_unit_cache and self.spec.unit_cache_dir is not None:
+            cache = load_valid_unit_cache(
+                self.spec.unit_cache_dir, self.spec.cobol_source.stem, unit.identifier,
+                self.cobol_source.read_text(encoding="utf-8"), unit.source,
+            )
+        if cache is not None:
+            result = verify_unit_from_cache(
+                unit.identifier, body, cache.fixtures,
+                Path(f"generated/orchestrator/{unit.identifier}/synthesis"), spec=self.spec,
+            )
+            verify_outcome = "ok (unit cache hit)" if result.compiled else "compile_error"
+        else:
+            result = verify_unit(unit.identifier, body, Path(f"generated/orchestrator/{unit.identifier}/synthesis"),
+                                  spec=self.spec)
+            verify_outcome = "ok" if result.compiled else "compile_error"
+            if self.spec.use_unit_cache:
+                verify_outcome += " (unit cache miss -- fell back to whole-program verify)"
+        self._emit(unit.identifier, "compile", "javac", time.monotonic() - t0, outcome=verify_outcome)
 
         if result.compiled:
             t0 = time.monotonic()

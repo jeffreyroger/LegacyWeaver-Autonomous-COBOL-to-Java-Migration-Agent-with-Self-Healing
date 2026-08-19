@@ -67,6 +67,16 @@ class RunSpec:
     # synthesis_mode). None (the default) means synthesis mode, unchanged
     # from before this field existed. Added 2026-08-12.
     candidate_body_path: Path | None = None
+    # GRAPH_PLAN.md M8: opt-in fast-path verification against a harvested
+    # UnitCache instead of re-running the whole assembled program
+    # (weaver.agent.replay_verify.verify_unit_from_cache), proven
+    # equivalent to attribution.verify_unit by M7's live tests. False by
+    # default -- existing runs are byte-for-byte unaffected. A cache miss
+    # or stale key always falls back to attribution.verify_unit (AC-17);
+    # this flag never changes what a run finds, only how fast it gets
+    # there when a valid cache exists.
+    use_unit_cache: bool = False
+    unit_cache_dir: Path | None = None
 
     @classmethod
     def default(cls) -> RunSpec:
