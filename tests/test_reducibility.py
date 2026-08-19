@@ -44,3 +44,21 @@ def test_rewrite_returns_source_unchanged_when_no_goto():
     p = _para("PROCESS-RECORD", "PROCESS-RECORD.\n    PERFORM VALIDATE-RECORD.\n")
     result = rewrite(p, all_paragraphs={})
     assert result == p.source
+
+
+def test_rewrite_inline_goto_in_if_end_if_on_one_line():
+    # Regression test: the inline single-line idiom
+    # `IF WS-EOF = 'Y' GO TO END-PARA END-IF.` -- exactly the shape
+    # test_classify_unstructured_with_goto's paragraph uses -- must be
+    # fully resolved by rewrite(), not merely left with "GO TO" still
+    # present in the output while returning non-None.
+    p = _para("PROCESS-RECORD",
+              "PROCESS-RECORD.\n    IF WS-EOF = 'Y' GO TO END-PARA END-IF.\n    MOVE 1 TO WS-X.\nEND-PARA.\n    MOVE 2 TO WS-Y.\n")
+    all_paras = {"PROCESS-RECORD": p, "END-PARA": _para("END-PARA", "END-PARA.\n    MOVE 2 TO WS-Y.\n")}
+    result = rewrite(p, all_paras)
+    assert result is not None
+    assert "GO TO" not in result.upper()
+    assert "PERFORM END-PARA" in result.upper()
+    # The enclosing IF/END-IF structure is preserved, not discarded.
+    assert "IF WS-EOF = 'Y'" in result
+    assert "END-IF" in result.upper()
