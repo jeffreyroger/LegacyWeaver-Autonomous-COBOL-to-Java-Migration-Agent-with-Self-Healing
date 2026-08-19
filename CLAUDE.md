@@ -159,6 +159,18 @@ harness, not as a replacement for it.
     `weaver/agent/inference.py`'s `provider="groq"` path). Nothing else may
     read this env var or relax the offline default.
 
+    **Scoped Text Refinement exception (2026-08-19, migration-framework-spec.md
+    §1):** `weaver/agent/text_refine.py` may call a hosted OpenAI-compatible
+    endpoint (default `gpt-4o-mini`) as an optional second-pass refinement of
+    an already-synthesized, already-scaffolded method body. This is opt-in
+    only (`RunSpec.use_text_refinement=True`), requires `OPENAI_API_KEY` set
+    in the environment, and is never invoked by default. A refined body is
+    re-verified through the same `attribution.verify_unit`/
+    `verify_unit_from_cache` path as any other body — refinement never
+    bypasses the comparison contract (rule 3) or the classifier (rule 4).
+    Nothing else may read `OPENAI_API_KEY`, and the local/CLI/backend default
+    path remains fully offline exactly as before.
+
 11. **Baseline defects are declared, not hidden (FR-8).** Any change to
     `baseline/Baseline.java` must keep its header comment accurate — it must
     enumerate every deviation the file actually contains, no more, no less.
