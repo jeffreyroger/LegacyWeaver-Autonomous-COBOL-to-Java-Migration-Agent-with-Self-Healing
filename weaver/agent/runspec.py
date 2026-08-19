@@ -78,6 +78,14 @@ class RunSpec:
     use_unit_cache: bool = False
     unit_cache_dir: Path | None = None
 
+    # Scoped Text Refinement exception (CLAUDE.md rule 10): opt-in, hosted
+    # gpt-4o-mini refinement pass run once per unit, after synthesis and
+    # before compile (weaver.agent.text_refine.refine). Requires
+    # OPENAI_API_KEY; a missing key or HTTP failure falls back to the
+    # unrefined synthesized body, never crashing the run. False by default
+    # -- existing runs stay fully local and offline and are unaffected.
+    use_text_refinement: bool = False
+
     @classmethod
     def default(cls) -> RunSpec:
         return cls()

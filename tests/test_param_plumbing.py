@@ -132,6 +132,19 @@ def test_backend_build_run_spec_threads_every_request_field(tmp_path):
     assert spec.replay is True
 
 
+def test_use_text_refinement_is_read_by_orchestrator():
+    """RunSpec.use_text_refinement must actually gate behaviour in
+    orchestrator.py, not just be accepted and ignored (the same defect
+    class rule 13 exists to eliminate -- see use_unit_cache's identical
+    wiring a few lines above in orchestrator.py)."""
+    import inspect
+
+    from weaver.agent import orchestrator as orchestrator_mod
+
+    source = inspect.getsource(orchestrator_mod)
+    assert "use_text_refinement" in source
+
+
 def test_verify_candidate_uses_injected_input_data(tmp_path, monkeypatch):
     from weaver.agent import verify as verify_mod
 

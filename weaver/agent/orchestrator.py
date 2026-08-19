@@ -174,6 +174,23 @@ class Orchestrator:
 
         body = synth.body.method_body
 
+        # Scoped Text Refinement exception (CLAUDE.md rule 10): opt-in,
+        # hosted gpt-4o-mini pass over the already-synthesized body. Its
+        # output is re-verified through the exact same attribution path
+        # below -- it never gets to claim correctness on its own say-so.
+        # A missing credential or HTTP failure falls back to the unrefined
+        # body, recorded via _emit rather than hidden (GRAPH_PLAN.md M8).
+        if self.spec.use_text_refinement:
+            t0 = time.monotonic()
+            try:
+                import os
+                from weaver.agent.text_refine import refine, TextRefinementError
+                body = refine(body, api_key=os.environ.get("OPENAI_API_KEY"))
+                self._emit(unit.identifier, "refine", "text_refine", time.monotonic() - t0, outcome="ok")
+            except TextRefinementError as exc:
+                self._emit(unit.identifier, "refine", "text_refine", time.monotonic() - t0,
+                            outcome=f"skipped: {exc}")
+
         # compile + verify -- GRAPH_PLAN.md M8: try the unit-cache fast path
         # first (proven equivalent to attribution.verify_unit by M7's live
         # tests), falling back to the real whole-program verify on any
