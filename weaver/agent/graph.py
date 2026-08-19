@@ -19,8 +19,11 @@ from dataclasses import dataclass, field
 
 from weaver.agent.segment import Paragraph
 from weaver.cobol.callgraph import calls as extract_calls
+from weaver.cobol.callgraph import goto_targets
 from weaver.cobol.callgraph import performs as extract_performs
 from weaver.cobol.dataflow import ReadWriteSet, read_write_set
+from weaver.cobol.reducibility import classify as classify_reducibility
+from weaver.cobol.reducibility import rewrite as rewrite_goto
 
 
 @dataclass(frozen=True)
@@ -38,12 +41,22 @@ class CallEdge:
 
 
 @dataclass(frozen=True)
+class GotoEdge:
+    source: str
+    target: str
+
+
+@dataclass(frozen=True)
 class ProgramGraph:
     program_id: str
     paragraphs: tuple[str, ...]
     performs: tuple[PerformEdge, ...] = field(default_factory=tuple)
     calls: tuple[CallEdge, ...] = field(default_factory=tuple)
     read_write_sets: dict[str, ReadWriteSet] = field(default_factory=dict)
+    goto_edges: tuple[GotoEdge, ...] = field(default_factory=tuple)
+    # paragraph_id -> "STRUCTURED" | "UNSTRUCTURED" | "UNSTRUCTURED_UNRESOLVED"
+    # (FR-11.2/11.3, weaver/cobol/reducibility.py).
+    reducibility: dict[str, str] = field(default_factory=dict)
 
     def callees(self, paragraph_id: str) -> list[str]:
         return [e.target for e in self.performs if e.source == paragraph_id]
@@ -99,6 +112,8 @@ class ProgramGraph:
                 pid: {"reads": sorted(rw.reads), "writes": sorted(rw.writes)}
                 for pid, rw in self.read_write_sets.items()
             },
+            "goto_edges": [{"source": e.source, "target": e.target} for e in self.goto_edges],
+            "reducibility": dict(self.reducibility),
         }
 
     def to_json(self) -> str:
@@ -113,6 +128,10 @@ def from_paragraphs(program_id: str, paragraphs: list[Paragraph]) -> ProgramGrap
     performs: list[PerformEdge] = []
     calls: list[CallEdge] = []
     read_write_sets: dict[str, ReadWriteSet] = {}
+    goto_edges: list[GotoEdge] = []
+    reducibility: dict[str, str] = {}
+
+    by_id = {p.identifier: p for p in paragraphs}
 
     for p in paragraphs:
         for perform in extract_performs(p.source, known):
@@ -124,10 +143,20 @@ def from_paragraphs(program_id: str, paragraphs: list[Paragraph]) -> ProgramGrap
             calls.append(CallEdge(source=p.identifier, program=call.program))
         read_write_sets[p.identifier] = read_write_set(p.identifier, p.source)
 
+        for target in goto_targets(p.source):
+            goto_edges.append(GotoEdge(source=p.identifier, target=target))
+
+        classification = classify_reducibility(p)
+        if classification == "UNSTRUCTURED" and rewrite_goto(p, by_id) is None:
+            classification = "UNSTRUCTURED_UNRESOLVED"
+        reducibility[p.identifier] = classification
+
     return ProgramGraph(
         program_id=program_id,
         paragraphs=tuple(p.identifier for p in paragraphs),
         performs=tuple(performs),
         calls=tuple(calls),
         read_write_sets=read_write_sets,
+        goto_edges=tuple(goto_edges),
+        reducibility=reducibility,
     )

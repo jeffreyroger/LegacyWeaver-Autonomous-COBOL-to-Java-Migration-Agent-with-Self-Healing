@@ -38,6 +38,8 @@ from weaver.agent.synthesize import SynthesisResult, synthesize_paragraph
 from weaver.agent.unit_cache import load_valid as load_valid_unit_cache
 from weaver.agent.validate import SynthesizedBody
 from weaver.atomic_json import write_json_atomic
+from weaver.cobol.callgraph import goto_targets
+from weaver.cobol.reducibility import rewrite as rewrite_goto
 from weaver.report import Report
 
 STATE_PATH = Path("generated/orchestrator_state.json")
@@ -135,6 +137,21 @@ class Orchestrator:
         # MAIN-PARA is control flow, handled by the scaffold's main loop).
         control_flow_ids = {"MAIN-PARA"}
         units = [p for p in paragraphs if p.identifier not in control_flow_ids]
+
+        # FR-11.3: a unit whose control flow contains a GO TO that
+        # reducibility.rewrite() cannot mechanically resolve is
+        # UNSTRUCTURED_UNRESOLVED -- excluded from synthesis rather than
+        # guessed at.
+        all_by_id = {p.identifier: p for p in paragraphs}
+        resolved_units = []
+        for u in units:
+            if goto_targets(u.source) and rewrite_goto(u, all_by_id) is None:
+                self._emit(u.identifier, "plan", "exclude_unresolved", 0.0,
+                            outcome="UNSTRUCTURED_UNRESOLVED: excluded from synthesis (FR-11.3)")
+                continue
+            resolved_units.append(u)
+        units = resolved_units
+
         self._emit("*", "plan", "select_units", 0.0, outcome=f"units={[u.identifier for u in units]}")
         return units
 
