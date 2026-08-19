@@ -34,6 +34,7 @@ _PERFORM_RE = re.compile(
     re.IGNORECASE,
 )
 _CALL_RE = re.compile(rf"\bCALL\s+(?P<program>{_LITERAL})", re.IGNORECASE)
+_GOTO_RE = re.compile(rf"\bGO\s+TO\s+(?P<target>{_IDENT})", re.IGNORECASE)
 
 _PERFORM_KEYWORDS = {"UNTIL", "VARYING", "TIMES", "WITH", "TEST"}
 
@@ -79,3 +80,10 @@ def calls(paragraph_text: str) -> list[Call]:
         if program[:1] in ('"', "'"):
             out.append(Call(program=program[1:-1]))
     return out
+
+
+def goto_targets(paragraph_source: str) -> list[str]:
+    """Paragraph-name targets of every `GO TO` in this paragraph's source,
+    in source order. FR-11.1 -- feeds reducibility.py's classification;
+    never consumed by scaffold.py (Non-Negotiable Design Decision 4)."""
+    return [m.group("target").upper() for m in _GOTO_RE.finditer(paragraph_source)]

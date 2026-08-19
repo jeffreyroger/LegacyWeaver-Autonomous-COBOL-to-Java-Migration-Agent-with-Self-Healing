@@ -23,7 +23,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from weaver.agent.segment import segment
-from weaver.cobol.callgraph import Call, Perform, calls, performs
+from weaver.cobol.callgraph import Call, Perform, calls, goto_targets, performs
 
 INTEREST_COB = Path(__file__).resolve().parent.parent / "fixtures" / "cobol" / "interest.cob"
 
@@ -91,3 +91,28 @@ def test_call_with_dynamic_identifier_target_is_skipped():
     text = "MAIN-PARA.\n    CALL WS-PROGRAM-NAME.\n"
     result = calls(text)
     assert result == []
+
+
+def test_goto_targets_extracts_simple_goto():
+    source = """
+        PROCESS-RECORD.
+            IF WS-EOF-FLAG = 'Y'
+                GO TO END-PARA
+            END-IF.
+    """
+    assert goto_targets(source) == ["END-PARA"]
+
+
+def test_goto_targets_empty_when_none_present():
+    source = "PROCESS-RECORD.\n    MOVE WS-A TO WS-B.\n"
+    assert goto_targets(source) == []
+
+
+def test_goto_targets_multiple_in_order():
+    source = """
+        EVALUATE WS-CODE
+            WHEN 1 GO TO CASE-ONE
+            WHEN 2 GO TO CASE-TWO
+        END-EVALUATE.
+    """
+    assert goto_targets(source) == ["CASE-ONE", "CASE-TWO"]
