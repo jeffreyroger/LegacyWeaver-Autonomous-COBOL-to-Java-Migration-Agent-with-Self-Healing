@@ -46,12 +46,19 @@ def test_interest_spec_output_unchanged_despite_having_redefines_fields():
 def test_redefines_produces_subclass_per_overlay():
     # Minimal synthetic ScaffoldSpec: AR-FLAGS (2 bytes) redefined by two
     # 1-byte elementary fields, AR-DORMANT and AR-HOLD -- the same shape as
-    # INTEREST_SPEC's real overlay, but with the opt-in flag turned on.
+    # INTEREST_SPEC's real overlay, but with the opt-in flag turned on. A
+    # second overlay group, AR-EXTRA (3 numeric bytes) redefined by AR-SCORE
+    # (a numeric field), exercises the CobolEdit.zeroPadded packing branch
+    # (scaffold.py's `if f.numeric:` inside _redefines_subclasses), which the
+    # AR-DORMANT/AR-HOLD group alone never reaches because both are String
+    # fields.
     layout = (
         Field("AR-ID", offset=0, width=10, numeric=False),
         Field("AR-FLAGS", offset=10, width=2, numeric=False),
         Field("AR-DORMANT", offset=10, width=1, numeric=False, redefines="AR-FLAGS"),
         Field("AR-HOLD", offset=11, width=1, numeric=False, redefines="AR-FLAGS"),
+        Field("AR-EXTRA", offset=12, width=3, numeric=False),
+        Field("AR-SCORE", offset=12, width=3, numeric=True, decimal_scale=0, redefines="AR-EXTRA"),
     )
     spec = ScaffoldSpec(
         input_file="x.dat",
@@ -65,8 +72,8 @@ def test_redefines_produces_subclass_per_overlay():
         ws_fields=(WorkingStorageField("total", 2),),
         accumulator_field="total",
         per_record_field="total",
-        report_ctor_map={"AR-ID": "ar.id", "AR-FLAGS": "ar.flags"},
-        totals_ctor_map={"AR-ID": "ar.id", "AR-FLAGS": "ar.flags"},
+        report_ctor_map={"AR-ID": "ar.id", "AR-FLAGS": "ar.flags", "AR-EXTRA": "ar.extra"},
+        totals_ctor_map={"AR-ID": "ar.id", "AR-FLAGS": "ar.flags", "AR-EXTRA": "ar.extra"},
         redefines_as_subclasses=True,
     )
     output = generate(spec)
@@ -76,6 +83,39 @@ def test_redefines_produces_subclass_per_overlay():
     assert "class FlagsOverlay extends AccountRecord" in output
     assert "final String dormant;" in output
     assert "final String hold;" in output
+
+    # --- Correctness of decode, tied to AR-DORMANT's declared offset/width
+    # (offset=10, width=1) -- a String (non-numeric) overlay field. This is
+    # the exact literal substring expression _decode_field_expr must produce
+    # for that offset/width; an off-by-one in _redefines_subclasses would
+    # change this text.
+    assert "this.dormant = line.substring(10, 11);" in output
+    assert "this.hold = line.substring(11, 12);" in output
+
+    # --- Correctness of pack (setBytes), tied to the same offset/width, for
+    # the same non-numeric field -- Scaffold.pad + arraycopy positioned at
+    # the field's declared offset within the shared buffer.
+    assert (
+        "System.arraycopy(Scaffold.pad(dormant, 1)"
+        ".getBytes(java.nio.charset.StandardCharsets.US_ASCII), 0, b, 10, 1);"
+        in output
+    )
+    assert (
+        "System.arraycopy(Scaffold.pad(hold, 1)"
+        ".getBytes(java.nio.charset.StandardCharsets.US_ASCII), 0, b, 11, 1);"
+        in output
+    )
+
+    # --- Numeric overlay field (AR-SCORE, offset=12, width=3, scale=0):
+    # covers the CobolEdit.zeroPadded packing branch, previously untested.
+    assert "class ExtraOverlay extends AccountRecord" in output
+    assert "final java.math.BigDecimal score;" in output
+    assert "this.score = Scaffold.decodeUnsigned(line.substring(12, 15), 0);" in output
+    assert (
+        "System.arraycopy(CobolEdit.zeroPadded(score, 3)"
+        ".getBytes(java.nio.charset.StandardCharsets.US_ASCII), 0, b, 12, 3);"
+        in output
+    )
 
 
 # Golden text captured by running generate(TAXCALC_SPEC) BEFORE this task's
