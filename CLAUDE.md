@@ -171,6 +171,20 @@ harness, not as a replacement for it.
     Nothing else may read `OPENAI_API_KEY`, and the local/CLI/backend default
     path remains fully offline exactly as before.
 
+    **Scoped local WSL delegation exception (2026-08-20,
+    SUBPROGRAM_VERIFICATION_PLAN.md Phase X3):** `weaver/agent/subprogram_verify.py`
+    may route `cobc` invocations through `wsl -e bash -lc` instead of calling
+    it directly. This is opt-in only (`WEAVER_COBC_VIA_WSL=1` in the
+    environment) and only ever takes effect when no native `cobc` is on
+    PATH — a machine with native `cobc` (every CI runner) never touches this
+    path regardless of the env var. It exists solely because this
+    project's Windows dev machine has no native GnuCOBOL toolchain; it
+    changes nothing about what gets verified — the same real,
+    currently-compiled subprogram source is compiled and run either way,
+    only the shell wrapper differs. Nothing else may read
+    `WEAVER_COBC_VIA_WSL`, and no other module may gain a WSL branch
+    without its own disclosed exception here.
+
 11. **Baseline defects are declared, not hidden (FR-8).** Any change to
     `baseline/Baseline.java` must keep its header comment accurate — it must
     enumerate every deviation the file actually contains, no more, no less.
