@@ -49,6 +49,19 @@ class ScaffoldSpec:
     per_record_field: str           # java name added to the accumulator each record, e.g. "interest"
     report_ctor_map: dict[str, str]  # REPORT_LAYOUT field name -> java expression
     totals_ctor_map: dict[str, str]  # TOTALS_LAYOUT field name -> java expression
+    # Task 5 (FR-12.1-12.3): opt-in switch for generating input_layout's
+    # REDEFINES overlays as Java subclasses over a shared byte[] buffer
+    # instead of the pre-existing flattened substring-accessor style (see
+    # `_redefines_subclasses`). Defaults to False so every ScaffoldSpec
+    # declared before this task -- INCLUDING INTEREST_SPEC below, whose
+    # INPUT_LAYOUT already has two `redefines` fields (AR-DORMANT/AR-HOLD
+    # redefining AR-FLAGS) consumed elsewhere as `ar.dormant()` string
+    # accessors (report_ctor_map, condition_names, _main_class) -- keeps
+    # taking the exact code path it always has. Flipping this to True is a
+    # deliberate per-spec choice, never an automatic consequence of a field
+    # merely having `redefines` set, because INTEREST_SPEC already proves
+    # that assumption is false for a real, currently-shipping fixture.
+    redefines_as_subclasses: bool = False
 
 
 # Declared from the 88-levels in fixtures/cobol/copybooks/ACCOUNT-REC.cpy.
@@ -167,53 +180,123 @@ def _decode_field_expr(field: Field) -> str:
     )
 
 
+def _redefines_subclasses(input_layout: tuple[Field, ...]) -> str:
+    """One Java subclass per REDEFINES overlay group (FR-12.1/12.2).
+
+    Fields sharing the same `redefines` target are grouped into a single
+    subclass -- COBOL REDEFINES lets several elementary items reuse one
+    byte range, and one subclass is one alternate *view* over that range,
+    not one field. Each subclass extends `AccountRecord`, inherits its
+    shared `buffer` field (never duplicates it), and decodes its own
+    fields from that buffer using the exact same `_decode_field_expr`
+    arithmetic the base class uses for its own fields -- this changes only
+    the class-shape wrapper, not the decode/encode logic itself.
+    """
+    base_super_args = ", ".join(
+        ["base.buffer"] + [f"base.{_java_field_name(f.name)}" for f in _base_fields(input_layout)]
+    )
+
+    groups: dict[str, list[Field]] = {}
+    for f in input_layout:
+        if f.redefines is not None:
+            groups.setdefault(f.redefines, []).append(f)
+
+    subclasses = []
+    for target_name in groups:
+        fields = groups[target_name]
+        overlay_name = _java_field_name(target_name)[0].upper() + _java_field_name(target_name)[1:] + "Overlay"
+
+        components = [f"        final {'java.math.BigDecimal' if f.numeric else 'String'} {_java_field_name(f.name)};" for f in fields]
+        decodes = [f"            this.{_java_field_name(f.name)} = {_decode_field_expr(f)};" for f in fields]
+
+        pack_stmts = []
+        for f in fields:
+            jname = _java_field_name(f.name)
+            if f.numeric:
+                pack_stmts.append(
+                    f'            System.arraycopy(CobolEdit.zeroPadded({jname}, {f.width})'
+                    f'.getBytes(java.nio.charset.StandardCharsets.US_ASCII), 0, b, {f.offset}, {f.width});'
+                )
+            else:
+                pack_stmts.append(
+                    f'            System.arraycopy(Scaffold.pad({jname}, {f.width})'
+                    f'.getBytes(java.nio.charset.StandardCharsets.US_ASCII), 0, b, {f.offset}, {f.width});'
+                )
+
+        subclasses.append(f"""\
+    static final class {overlay_name} extends AccountRecord {{
+{chr(10).join(components)}
+
+        {overlay_name}(AccountRecord base) {{
+            super({base_super_args});
+            String line = new String(base.buffer, java.nio.charset.StandardCharsets.US_ASCII);
+{chr(10).join(decodes)}
+        }}
+
+        byte[] getBytes() {{
+            return buffer;
+        }}
+
+        void setBytes(byte[] b) {{
+{chr(10).join(pack_stmts)}
+            System.arraycopy(b, 0, buffer, 0, b.length);
+        }}
+    }}
+""")
+    return "\n".join(subclasses)
+
+
 def _account_record_class(spec: ScaffoldSpec) -> str:
     input_layout = spec.input_layout
     fields = _base_fields(input_layout)
-    components = []
-    decodes = []
-    for f in fields:
-        jname = _java_field_name(f.name)
-        jtype = "java.math.BigDecimal" if f.numeric else "String"
-        components.append(f"    final {jtype} {jname};")
-        decodes.append(f"                {_decode_field_expr(f)}")
+    has_redefines = any(f.redefines is not None for f in input_layout)
 
-    ctor_params = ", ".join(
-        f"{'java.math.BigDecimal' if f.numeric else 'String'} {_java_field_name(f.name)}"
-        for f in fields
-    )
-    ctor_assigns = "\n".join(f"        this.{_java_field_name(f.name)} = {_java_field_name(f.name)};" for f in fields)
-    decode_args = ",\n".join(decodes)
+    if not (spec.redefines_as_subclasses and has_redefines):
+        # Unchanged from before Task 5 -- flattened substring accessors.
+        components = []
+        decodes = []
+        for f in fields:
+            jname = _java_field_name(f.name)
+            jtype = "java.math.BigDecimal" if f.numeric else "String"
+            components.append(f"    final {jtype} {jname};")
+            decodes.append(f"                {_decode_field_expr(f)}")
 
-    # REDEFINES accessors, relative to their target's byte range.
-    redefines_accessors = []
-    targets = {f.name: f for f in input_layout}
-    for f in input_layout:
-        if f.redefines is None:
-            continue
-        target = targets[f.redefines]
-        rel_start = f.offset - target.offset
-        rel_end = rel_start + f.width
-        method = _java_field_name(f.name)
-        target_jname = _java_field_name(target.name)
-        redefines_accessors.append(
-            f"    String {method}() {{ return {target_jname}.substring({rel_start}, {rel_end}); }}"
+        ctor_params = ", ".join(
+            f"{'java.math.BigDecimal' if f.numeric else 'String'} {_java_field_name(f.name)}"
+            for f in fields
         )
+        ctor_assigns = "\n".join(f"        this.{_java_field_name(f.name)} = {_java_field_name(f.name)};" for f in fields)
+        decode_args = ",\n".join(decodes)
 
-    condition_methods = []
-    for c in spec.condition_names:
-        parent = next((f for f in input_layout if f.name == c.parent_field), None)
-        if parent is None:
-            continue
-        if parent.redefines is not None:
-            accessor = f"{_java_field_name(parent.name)}()"
-        else:
-            accessor = _java_field_name(parent.name)
-        condition_methods.append(
-            f'    boolean {c.java_name}() {{ return {accessor}.equals("{c.true_value}"); }}'
-        )
+        # REDEFINES accessors, relative to their target's byte range.
+        redefines_accessors = []
+        targets = {f.name: f for f in input_layout}
+        for f in input_layout:
+            if f.redefines is None:
+                continue
+            target = targets[f.redefines]
+            rel_start = f.offset - target.offset
+            rel_end = rel_start + f.width
+            method = _java_field_name(f.name)
+            target_jname = _java_field_name(target.name)
+            redefines_accessors.append(
+                f"    String {method}() {{ return {target_jname}.substring({rel_start}, {rel_end}); }}"
+            )
 
-    return f"""\
+        condition_methods = []
+        for c in spec.condition_names:
+            parent = next((f for f in input_layout if f.name == c.parent_field), None)
+            if parent is None:
+                continue
+            if parent.redefines is not None:
+                accessor = f"{_java_field_name(parent.name)}()"
+            else:
+                accessor = _java_field_name(parent.name)
+            condition_methods.append(
+                f'    boolean {c.java_name}() {{ return {accessor}.equals("{c.true_value}"); }}'
+            )
+
+        return f"""\
 final class AccountRecord {{
 {chr(10).join(components)}
 
@@ -232,6 +315,69 @@ final class AccountRecord {{
 {chr(10).join(condition_methods)}
 }}
 """
+
+    # Task 5 (FR-12.1-12.3): REDEFINES overlays as subclasses over a shared
+    # byte[] buffer, gated on spec.redefines_as_subclasses -- see the field
+    # comment on ScaffoldSpec for why this isn't automatic.
+    components = ["    final byte[] buffer;"]
+    decodes = []
+    for f in fields:
+        jname = _java_field_name(f.name)
+        jtype = "java.math.BigDecimal" if f.numeric else "String"
+        components.append(f"    final {jtype} {jname};")
+        decodes.append(f"                {_decode_field_expr(f)}")
+
+    ctor_params = ", ".join(
+        ["byte[] buffer"] + [
+            f"{'java.math.BigDecimal' if f.numeric else 'String'} {_java_field_name(f.name)}"
+            for f in fields
+        ]
+    )
+    ctor_assigns = "\n".join(
+        ["        this.buffer = buffer;"]
+        + [f"        this.{_java_field_name(f.name)} = {_java_field_name(f.name)};" for f in fields]
+    )
+    decode_args = ",\n".join(decodes)
+
+    condition_methods = []
+    for c in spec.condition_names:
+        parent = next((f for f in input_layout if f.name == c.parent_field), None)
+        if parent is None or parent.redefines is not None:
+            # Overlay-owned condition names live on their subclass, not here.
+            continue
+        accessor = _java_field_name(parent.name)
+        condition_methods.append(
+            f'    boolean {c.java_name}() {{ return {accessor}.equals("{c.true_value}"); }}'
+        )
+
+    return f"""\
+class AccountRecord {{
+{chr(10).join(components)}
+
+    AccountRecord({ctor_params}) {{
+{ctor_assigns}
+    }}
+
+    static AccountRecord decode(String line) {{
+        byte[] buffer = line.getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+        return new AccountRecord(
+            buffer,
+{decode_args}
+        );
+    }}
+
+    byte[] getBytes() {{
+        return buffer;
+    }}
+
+    void setBytes(byte[] b) {{
+        System.arraycopy(b, 0, buffer, 0, b.length);
+    }}
+
+{chr(10).join(condition_methods)}
+}}
+
+{_redefines_subclasses(input_layout)}"""
 
 
 def _line_class(class_name: str, layout: tuple[Field, ...]) -> str:
