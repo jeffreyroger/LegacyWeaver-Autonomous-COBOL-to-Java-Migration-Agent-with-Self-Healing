@@ -15,7 +15,7 @@ def test_defaults_match_srs_3_9_1():
     """Defaults are copied verbatim from SRS SS3.9.1."""
     spec = RunSpec.default()
     assert spec.max_repairs == 3
-    assert spec.model == "qwen2.5-coder:7b"
+    assert spec.model == "granite-code:20b"
     assert spec.seed == 42
     assert spec.replay is False
 

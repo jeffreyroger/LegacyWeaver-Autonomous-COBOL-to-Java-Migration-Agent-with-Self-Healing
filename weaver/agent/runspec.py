@@ -17,9 +17,13 @@ from pathlib import Path
 
 from weaver.agent.scaffold import INTEREST_SPEC, ScaffoldSpec
 
-# Defaults copied verbatim from SRS SS3.9.1.
+# Defaults copied verbatim from SRS SS3.9.1. DEFAULT_MODEL updated
+# 2026-08-21 (SRS SS3.9.1/A.2 amended same day): qwen2.5-coder:7b ->
+# granite-code:20b, migration-framework-spec.md Section 1.1's actual
+# named Code Processing Agent example, now that it's confirmed available
+# via Ollama (see LEGACYWEAVER_SRS.md's amendment note for the full story).
 DEFAULT_MAX_REPAIRS = 3
-DEFAULT_MODEL = "qwen2.5-coder:7b"
+DEFAULT_MODEL = "granite-code:20b"
 DEFAULT_SEED = 42
 
 DEFAULT_COBOL_SOURCE = Path("fixtures/cobol/interest.cob")

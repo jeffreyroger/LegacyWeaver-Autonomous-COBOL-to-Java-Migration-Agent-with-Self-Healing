@@ -18,7 +18,7 @@ def test_migrate_defaults_match_srs_3_9_1():
     args = build_parser().parse_args(["migrate", "prog.cbl"])
     spec = build_migrate_spec(args)
     assert spec.max_repairs == 3
-    assert spec.model == "qwen2.5-coder:7b"
+    assert spec.model == "granite-code:20b"
     assert spec.seed == 42
     assert spec.replay is False
 

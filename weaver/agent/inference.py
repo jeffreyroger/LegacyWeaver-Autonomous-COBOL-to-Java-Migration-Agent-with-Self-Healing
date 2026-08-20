@@ -27,7 +27,7 @@ from weaver.agent.cache import PromptCache
 
 OLLAMA_HOST = "http://127.0.0.1:11434"  # loopback only -- J1 offline requirement
 GROQ_HOST = "https://api.groq.com/openai/v1"
-DEFAULT_MODEL = "qwen2.5-coder:7b"
+DEFAULT_MODEL = "granite-code:20b"  # matches runspec.py's DEFAULT_MODEL -- keep in sync, see that module's comment
 FALLBACK_MODEL = "qwen2.5-coder:3b"
 GROQ_DEFAULT_MODEL = "openai/gpt-oss-20b"  # only models with Structured Outputs support (console.groq.com/docs/structured-outputs)
 SEED = 42

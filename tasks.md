@@ -167,7 +167,7 @@ the actual codebase, module by module:
 
 | Spec section | Capability | Module | Present? |
 |---|---|---|---|
-| §1.1 Code Processing Agent | local paragraph/subprogram synthesis | `weaver/agent/inference.py` (`qwen2.5-coder:7b` via Ollama, substituted for the spec's example `granite-34b`/`granite-20b-code-cobol` — not available locally through Ollama; disclosed substitution, not a gap) | ✅ (substituted model) |
+| §1.1 Code Processing Agent | local paragraph/subprogram synthesis | `weaver/agent/inference.py`/`runspec.py` (`granite-code:20b` via Ollama, matching the spec's named IBM Granite family) | ✅ (2026-08-21: switched from the earlier `qwen2.5-coder:7b` substitution now that `granite-code:20b` is confirmed pullable/reachable via Ollama — see `LEGACYWEAVER_SRS.md`'s A.2 amendment note; `qwen2.5-coder:3b`/`:7b` remain available via `--model`) |
 | §1.1 Text Processing Agent | opt-in hosted refinement | `weaver/agent/text_refine.py` (`gpt-4o-mini` — matches spec's named model) | ✅ |
 | §2.1 `GO TO`/`PERFORM THRU` control-flow reduction | Method Designer | `weaver/cobol/reducibility.py`, `weaver/cobol/callgraph.py` | ✅ |
 | §2.2 Failure Memory | persistent repair-loop memory | `weaver/agent/memory.py` (built under `AGENT_LAYER_PLAN.md`, predates this spec) | ✅ |

@@ -65,7 +65,7 @@ def build_parser() -> argparse.ArgumentParser:
     report_cmd.add_argument("run_dir", type=Path)
 
     # SRS 3.9.1: weaver migrate <program.cbl> [--copybook DIR] [--data FILE]
-    #            [--out DIR] [--max-repairs 3] [--model qwen2.5-coder:7b] [--seed 42]
+    #            [--out DIR] [--max-repairs 3] [--model granite-code:20b] [--seed 42]
     migrate = sub.add_parser("migrate", help="Autonomously migrate a COBOL program to Java")
     migrate.add_argument("program", type=Path, help="COBOL program to migrate")
     migrate.add_argument("--copybook", type=Path, default=None, help="Copybook directory")

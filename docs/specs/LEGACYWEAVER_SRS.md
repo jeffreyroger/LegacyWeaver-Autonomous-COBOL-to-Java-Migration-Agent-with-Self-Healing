@@ -346,7 +346,7 @@ All model interactions shall be cached keyed by prompt hash. `--replay` shall se
 ### 3.9.1 Command-line interface **[MUST]**
 ```
 weaver migrate  <program.cbl> [--copybook DIR] [--data FILE] [--out DIR]
-                [--max-repairs 3] [--model qwen2.5-coder:7b] [--seed 42]
+                [--max-repairs 3] [--model granite-code:20b] [--seed 42]
 weaver verify   --cobol <src> --java <src> --data <file>
 weaver baseline <program.cbl>
 weaver replay   <run_id>
@@ -574,10 +574,22 @@ Embeddings: `nomic-embed-text` (768-dim) or `all-MiniLM-L6-v2` (384-dim) execute
 
 ## A.2 Inference parameters
 
+**Updated 2026-08-21:** default model changed from `qwen2.5-coder:7b` to
+`granite-code:20b` -- migration-framework-spec.md Section 1.1 names IBM's
+Granite family (`granite-34b-code-instruct`/`granite-20b-code-cobol`) as
+the Code Processing Agent's example model; `qwen2.5-coder:7b` was used
+instead earlier in this project on the belief no Granite model was
+available through Ollama's local catalog. That belief was wrong --
+`granite-code:20b` pulls and runs locally like any other Ollama model,
+confirmed 2026-08-21 (`ollama pull granite-code:20b`, verified reachable
+via `/api/tags`). `qwen2.5-coder:3b`/`:7b` remain pulled and usable via
+`--model` for anyone who wants the smaller/faster models; they are no
+longer the default.
+
 ```yaml
 model:
   endpoint: http://127.0.0.1:11434    # loopback enforced at startup
-  name: qwen2.5-coder:7b
+  name: granite-code:20b
   digest: <pinned sha256>
   temperature: 0.0
   top_p: 1.0
