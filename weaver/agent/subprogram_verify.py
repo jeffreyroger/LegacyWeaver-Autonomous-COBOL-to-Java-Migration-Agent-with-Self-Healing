@@ -121,9 +121,11 @@ public final class Driver {{
 
 def _run(argv: list[str], work_dir: Path, stdin_text: str, *, via_wsl: bool) -> subprocess.CompletedProcess:
     if via_wsl:
+        import shlex
+
         wsl_dir = _to_wsl_path(work_dir)
-        shell_cmd = " ".join(argv)
-        full = ["wsl", "-e", "bash", "-lc", f"cd '{wsl_dir}' && {shell_cmd}"]
+        shell_cmd = " ".join(shlex.quote(a) for a in argv)
+        full = ["wsl", "-e", "bash", "-lc", f"cd {shlex.quote(wsl_dir)} && {shell_cmd}"]
         return subprocess.run(full, input=stdin_text, capture_output=True, text=True, timeout=TIMEOUT_SECONDS)
     env = dict(os.environ)
     env["COB_LIBRARY_PATH"] = "."

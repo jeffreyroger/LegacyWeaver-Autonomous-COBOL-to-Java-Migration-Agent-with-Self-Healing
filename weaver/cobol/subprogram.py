@@ -21,6 +21,7 @@ Decision 4).
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,6 +29,8 @@ from weaver.agent.segment import segment
 from weaver.cobol.data_division import UnsupportedDataItemError, flatten, parse_items
 from weaver.cobol.source import Statement, statements
 from weaver.layout import Field
+
+_PROGRAM_ID_RE = re.compile(r"[A-Z0-9][A-Z0-9-]*")
 
 _DIVISION_MARKERS = {
     "IDENTIFICATION DIVISION": "identification",
@@ -116,6 +119,15 @@ def load_subprogram(cobol_source: Path) -> SubprogramModel:
 
     if not program_id:
         raise UnsupportedSubprogramError(f"{cobol_source}: no PROGRAM-ID found")
+    if not _PROGRAM_ID_RE.fullmatch(program_id):
+        # Defence in depth: subprogram_verify.py (Phase X3) uses program_id
+        # verbatim in generated filenames and shell commands (cobc -o
+        # <program_id>.so, CALL "<program_id>" inside a generated driver).
+        # A COBOL identifier is always [A-Z0-9-]+ -- anything else is
+        # rejected here, at the source, rather than trusted downstream.
+        raise UnsupportedSubprogramError(
+            f"{cobol_source}: PROGRAM-ID {program_id!r} is not a valid COBOL identifier"
+        )
     if using_params is None:
         raise UnsupportedSubprogramError(f"{cobol_source}: no PROCEDURE DIVISION found")
 
