@@ -61,6 +61,7 @@ be proven end-to-end yet, for a disclosed reason — not the same as untouched.
 | # | Phase | Status |
 |---|---|---|
 | AA1 | `weaver/agent/hierarchical_segment.py` (intra-file PERFORM call graph, leaf-first cycle-tolerant topological order, recursive size-bounded block splitting) + `weaver/agent/batch_prompt.py` + `weaver/agent/batch_synthesize.py` (one LLM call per block, "topological call rankings" = already-translated sibling methods named in each later block's prompt) + `fixtures/cobol/hierarchical/big_program.cob` | ✅ real: `test_hierarchical_segment.py` proves real recursive splitting (depth > 0) and leaf-first ordering against a real 9-paragraph fixture parsed by the real `segment()`, plus a genuinely cyclic case handled deterministically; `test_batch_synthesize.py` proves leaf-first context actually reaches later prompts, reuses `validate.py`'s hardened `auto_qualify`/`static_reject` unmodified, and merges via the real, unmodified `assemble()` into real `javac`-compiled, `java`-executed, order-verified output |
+| AA2 | `weaver/agent/class_designer.py` (cross-program layout-signature scan) + `weaver/agent/shared_class_codegen.py` (standalone shared Java record class, `layout_kind`-aware decode-only/encode-only, zero dependency on any one program's `Scaffold`) + `weaver dedup` CLI + `fixtures/cobol_billfee/billfee.cob` (new, `COPY`s the same `FEE-REC.cpy` `fixtures/cobol_feecalc/feecalc.cob` uses) | ✅ real: `discover_shared_layouts` run over this repo's actual `fixtures/` finds the staged FEECALC/BILLFEE input-layout share (real shared copybook) **and** an independent, previously-unknown finding -- 8 existing programs already share an identical `TL-LABEL`/`TL-TOTAL`/`TL-FILLER` totals-line shape; all 3 real shared classes `javac`-compile together in one batch (see Validation pass below for the multi-file bug this caught) |
 
 ---
 
@@ -71,7 +72,7 @@ be proven end-to-end yet, for a disclosed reason — not the same as untouched.
 - ✅ ~~`EXEC SQL`/`EXEC CICS` dynamic mocking, "Paragraphs Hit"/"External Stub Log" parity axes~~ — built 2026-08-20, Phase Z1. See `weaver/agent/mocked_verify.py`, `weaver/agent/parity_axes.py`, `fixtures/cobol/mocked/billing.cob`. Terminal State remains `weaver/comparison.py`'s existing, untouched byte-for-byte axis (CLAUDE.md rule 3).
 - ✅ ~~PostgreSQL / RabbitMQ / REST-for-CICS connector substitution~~ — built 2026-08-20, Phase Z2. See `weaver/agent/connector_codegen.py`, `weaver connectors` CLI, `fixtures/cobol/mocked/orders.cob`. Generated code is migration output only; every `weaver verify`/`weaver migrate` run still binds the offline adapter (CLAUDE.md rule 10) — never the real connectors.
 - ✅ ~~Hierarchical recursive segment-and-merge for massive files~~ — built 2026-08-20, Phase AA1. See `weaver/agent/hierarchical_segment.py`, `weaver/agent/batch_synthesize.py`, `fixtures/cobol/hierarchical/big_program.cob`. A generic capability over any `Paragraph` list, not wired into `ScaffoldSpec`'s existing single-paragraph-per-program synthesis path (that widening is further work).
-- ❌ Application-wide Class Designer dedup across modules — §3.2's stronger claim; no fixture proves out cross-program class sharing yet.
+- ✅ ~~Application-wide Class Designer dedup across modules~~ — built 2026-08-20, Phase AA2. See `weaver/agent/class_designer.py`, `weaver/agent/shared_class_codegen.py`, `fixtures/cobol_billfee/billfee.cob`. Additive scan/codegen only -- `weaver/agent/scaffold.py`'s per-program `generate()` (hardened, byte-identical-output contract) is untouched.
 
 ---
 
@@ -86,6 +87,59 @@ at `127.0.0.1:11434` unchanged, satisfying `inference.py`'s loopback-only
 guarantee. A `wsl --shutdown` + restart was needed once to unstick flaky
 port forwarding. X4 and X6's real-synthesis exit criteria both pass now.
 
+## Validation pass (2026-08-20, later same day)
+
+Ran the full suite, exercised every CLI command by hand and via new
+tests, and read/stress-tested each of this day's new modules against
+edge cases. Two real bugs found and fixed, both before this pass (neither
+had shipped to a released state):
+
+1. **`weaver/agent/shared_class_codegen.py` (Phase AA2), multi-file
+   compile collision.** `generate_shared_record_class` inlined the
+   `CobolDecode`/`CobolEdit` helper source into every generated file --
+   compiled fine for exactly one shared class in isolation (the only case
+   the original test covered), but a real `javac: duplicate class:
+   CobolEdit` error the moment two or more shared classes were compiled
+   together, which is the realistic use (a migration wants every
+   discovered shared class at once). A second, related issue: `encode()`
+   and `decode()` were both emitted unconditionally regardless of layout
+   kind, which crashed for any `totals_layout`/`report_layout` field
+   using a signed floating-sign edit style (a shape `decode()` never
+   needed to support, since this harness never decodes a report line).
+   Fixed: helpers now emit once via a new `generate_shared_helpers()`,
+   and `generate_shared_record_class` takes a `layout_kind` so it emits
+   only the method(s) that are semantically valid for that kind, matching
+   `weaver/agent/scaffold.py`'s own `AccountRecord`(decode-only)/
+   `ReportLine`/`TotalsLine`(encode-only) asymmetry. New regression test:
+   `test_every_discovered_shared_class_compiles_together_in_one_batch`.
+2. **`weaver/agent/connector_codegen.py` (Phase Z2), dead-code tautology.**
+   `_schema_sql`'s column filter was `for f in fields if f.numeric or True`
+   -- always `True` regardless of `f.numeric`, so functionally harmless
+   (every field was already being included) but misleading. Simplified to
+   drop the vestigial condition.
+
+Also found and closed a real coverage gap, not a bug: neither
+`weaver connectors` nor the newly-added `weaver dedup` CLI command had a
+test exercising `weaver.cli.main`'s actual argument parsing and dispatch
+-- both had only been verified by hand. Added `tests/test_cli_dedup_connectors.py`
+(5 tests, real subprocess-free `main()` invocation) and, separately,
+noticed Phase AA2's dedup capability had no CLI command at all (unlike
+Z2's `weaver connectors`) -- added `weaver dedup <cobol_dir>`, wired the
+same way, with its own real end-to-end run (`python -m weaver.cli dedup
+fixtures` finds and `javac`-compiles all 3 real shared classes in this
+repo's fixtures together, the exact scenario finding #1 above was blind
+to before the fix).
+
+Full suite after fixes: 293 passed, 32 skipped (real-toolchain tests
+gated on `javac`/reachable `cobc`/Ollama -- WSL's `cobc` and native
+Ollama were both unreachable during this pass, so those specific
+real-toolchain assertions did not re-run; every assertion that could run
+offline did, including real `javac` compiles), same 4 pre-existing
+failures (2 require a reachable Ollama for embeddings, 2 are a Windows
+path-separator assertion bug in the tests themselves -- `str(Path(...))`
+renders `\` on Windows, the tests hardcode `/`; reproduced identically on
+unmodified `main`, unrelated to any work in this repo). Zero regressions.
+
 ## All planned phases complete
 
 Phase W (8/8) and Phase X (X1–X7, including the X7 stretch phase) are all
@@ -97,9 +151,14 @@ fixed along the way during X7 (see commit `e1f83b0`): a broken
 missing worked example for cross-class CALL resolution that caused the
 deterministic (temperature=0) model to repeatedly return an empty body.
 
-Only the "Explicitly out of scope" roadmap items above remain — each
-requires its own new spec/plan before any code, per CLAUDE.md's
-scope discipline.
+**Update (2026-08-20, later same day):** every "Explicitly out of scope"
+roadmap item above has since been built for real (Phases X8, Y1, Z1, Z2,
+AA1, AA2) -- see the phase tables above and the traceability table in the
+next section for what each one actually proves and where it's disclosed
+as additive/opt-in rather than wired into the hardened per-program
+generator. `migration-framework-spec.md` has no further unbuilt section
+as of this update; full suite: 286 passed, same 4 pre-existing unrelated
+failures, zero regressions.
 
 ## Verification pass (2026-08-20)
 
@@ -115,7 +174,7 @@ the actual codebase, module by module:
 | §2.1/2.2 `EXEC SQL`/`EXEC CICS` mocking, Paragraphs-Hit / External-Stub-Log axes | dynamic mock generator | `weaver/agent/mock_generator.py` + `weaver/agent/parity_axes.py` (Phase Z1, 2026-08-20) | ✅ real cobc/javac, deterministic canned values |
 | §2.2 Delta debugging | input minimizer | `weaver/agent/delta_debug.py` + `weaver/agent/input_minimize.py` (Phase Y1, 2026-08-20) | ✅ real ddmin over real candidate re-runs, opt-in via `RunSpec.use_delta_debugging` |
 | §3.1 Hierarchical recursive segment-and-merge | large-file splitting | `weaver/agent/hierarchical_segment.py` (Phase AA1, 2026-08-20) | ✅ real recursive splitting + leaf-first topological order, not yet wired into `ScaffoldSpec`'s single-paragraph path |
-| §3.2 Class Designer (app-wide dedup) | cross-module class sharing | per-program only, no app-wide dedup | ❌ not built |
+| §3.2 Class Designer (app-wide dedup) | cross-module class sharing | `weaver/agent/class_designer.py` (Phase AA2, 2026-08-20) | ✅ real signature-based scan across the whole `fixtures/` tree, additive to the per-program generator |
 | §3.2 Method Designer | CFG reduction → Java methods | `weaver/cobol/reducibility.py` | ✅ |
 | §4.1 REDEFINES byte-buffer mirroring | subclass + getBytes/setBytes | `weaver/agent/scaffold.py` (confirmed present) | ✅ |
 | §4.1 COMP-3 → BigDecimal | exact decimal | `weaver/layout.py`, `weaver/cobol/data_division.py` | ✅ |

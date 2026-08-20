@@ -94,6 +94,19 @@ def build_parser() -> argparse.ArgumentParser:
     connectors.add_argument("--out-dir", type=Path, default=None,
                             help="Output directory (default: generated/connectors/<PROGRAM-ID>)")
 
+    # Phase AA2 (migration-framework-spec.md Section 3.2): scan a directory
+    # of COBOL programs for record layouts that are structurally identical
+    # across two or more programs, and emit one shared Java class per
+    # distinct shape instead of leaving each program to declare its own
+    # copy. Additive to weaver/agent/scaffold.py's per-program generator
+    # (never touches it) -- migration output only.
+    dedup = sub.add_parser(
+        "dedup", help="Find and generate shared Java classes for record layouts duplicated across programs"
+    )
+    dedup.add_argument("cobol_dir", type=Path, help="Directory to scan recursively for *.cob files")
+    dedup.add_argument("--out-dir", type=Path, default=Path("generated") / "shared_classes",
+                        help="Output directory (default: generated/shared_classes)")
+
     original_parse_args = parser.parse_args
 
     def parse_args(args=None, namespace=None):
@@ -431,6 +444,39 @@ def run_connectors(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_dedup(args: argparse.Namespace) -> int:
+    from weaver.agent.class_designer import discover_shared_layouts
+    from weaver.agent.shared_class_codegen import generate_shared_helpers, generate_shared_record_class
+
+    if not args.cobol_dir.is_dir():
+        console.print(f"[red]{args.cobol_dir} is not a directory.[/red]")
+        return 1
+
+    plan = discover_shared_layouts(args.cobol_dir)
+    if not plan.shared:
+        console.print(f"[yellow]No structurally identical layouts shared across 2+ programs found under {args.cobol_dir}.[/yellow]")
+        if plan.skipped:
+            console.print(f"[yellow]{len(plan.skipped)} source file(s) could not be parsed as a file-based program and were skipped.[/yellow]")
+        return 0
+
+    args.out_dir.mkdir(parents=True, exist_ok=True)
+    written = [args.out_dir / "CobolShared.java"]
+    written[0].write_text(generate_shared_helpers(), encoding="utf-8")
+
+    console.print(f"[green]Found {len(plan.shared)} shared layout(s) in {args.cobol_dir}:[/green]")
+    for shared in plan.shared:
+        source = generate_shared_record_class(shared.class_name, shared.layout, shared.layout_kind)
+        path = args.out_dir / f"{shared.class_name}.java"
+        path.write_text(source, encoding="utf-8")
+        written.append(path)
+        programs = ", ".join(sorted({u.program_id for u in shared.used_by}))
+        console.print(f"  {shared.class_name} ({shared.layout_kind}) -- used by {programs} -> {path}")
+
+    if plan.skipped:
+        console.print(f"[yellow]{len(plan.skipped)} source file(s) skipped (not a file-based program).[/yellow]")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -443,6 +489,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_migrate(args)
     if args.command == "connectors":
         return run_connectors(args)
+    if args.command == "dedup":
+        return run_dedup(args)
     parser.print_help()
     return 2
 

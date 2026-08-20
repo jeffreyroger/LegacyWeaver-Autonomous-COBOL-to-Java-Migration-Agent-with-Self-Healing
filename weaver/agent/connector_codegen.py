@@ -41,7 +41,9 @@ def _sql_column_type(field: Field) -> str:
 
 def _schema_sql(program_id: str, bindings: list[ConnectorBinding], fields: tuple[Field, ...]) -> str:
     tables = {b.target for b in bindings if b.kind == ConnectorKind.POSTGRES}
-    columns = ",\n    ".join(f"{f.name.replace('-', '_')} {_sql_column_type(f)}" for f in fields if f.numeric or True)
+    # Every field gets a column (numeric -> NUMERIC, alphanumeric -> CHAR
+    # via _sql_column_type) -- there is no field kind excluded here.
+    columns = ",\n    ".join(f"{f.name.replace('-', '_')} {_sql_column_type(f)}" for f in fields)
     statements = [
         f"-- Phase Z2: derived from {program_id}'s LINKAGE SECTION field table "
         f"(weaver.layout.Field) -- never hand-declared (CLAUDE.md rule 9).",
