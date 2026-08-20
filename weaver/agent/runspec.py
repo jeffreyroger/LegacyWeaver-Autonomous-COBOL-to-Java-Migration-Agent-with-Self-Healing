@@ -86,6 +86,23 @@ class RunSpec:
     # -- existing runs stay fully local and offline and are unaffected.
     use_text_refinement: bool = False
 
+    # Phase X8 (docs/specs/SUBPROGRAM_VERIFICATION_PLAN.md,
+    # migration-framework-spec.md Section 5.2 Step 2): opt-in switch for
+    # weaver.agent.witness_search's six real witness-search algorithms as
+    # the subprogram verification witness set, instead of
+    # leaf_orchestrator.py's fixed, hand-verified DEFAULT_SUBPROGRAM_WITNESSES.
+    # True by default; existing tests that pin the exact fixed 6-value set
+    # set this False to keep their exact witness list unchanged.
+    use_witness_search: bool = True
+
+    # Phase Y1 (migration-framework-spec.md Section 2.2, delta debugging /
+    # input minimization): opt-in switch for weaver.agent.input_minimize's
+    # real ddmin-based minimizer as the repair loop's counterexample
+    # source, instead of arbitrarily using divergences[0]. False by
+    # default -- existing repair-loop tests keep their exact
+    # divergences[0]-based prompt content unchanged.
+    use_delta_debugging: bool = False
+
     @classmethod
     def default(cls) -> RunSpec:
         return cls()

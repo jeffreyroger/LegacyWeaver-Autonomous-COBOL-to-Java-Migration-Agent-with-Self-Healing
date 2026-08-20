@@ -33,6 +33,11 @@ class AttributionResult:
     classifications: list[Classification]
     compiled: bool
     compile_diagnostics: str | None
+    # Phase Y1 (delta debugging, migration-framework-spec.md Section 2.2):
+    # the already-compiled candidate's classpath dir, so a minimizer can
+    # re-run the SAME compiled candidate against reduced input files
+    # without recompiling. None when compilation failed (nothing to run).
+    build_dir: Path | None = None
 
 
 def verify_unit(unit_id: str, candidate_body: str, work_dir: Path,
@@ -70,7 +75,7 @@ def verify_unit(unit_id: str, candidate_body: str, work_dir: Path,
         report_layout=spec.scaffold_spec.report_layout,
         totals_layout=spec.scaffold_spec.totals_layout,
     )
-    return AttributionResult(unit_id, report, classifications, True, None)
+    return AttributionResult(unit_id, report, classifications, True, None, build_dir=build_dir)
 
 
 if __name__ == "__main__":

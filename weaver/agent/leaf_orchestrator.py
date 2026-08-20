@@ -141,6 +141,26 @@ class LeafOrchestrator:
             if cache_dir is not None:
                 self.verified_children[program_name] = cache_dir
 
+    def _witnesses_for(self, model, program_work_dir: Path) -> list[Decimal]:
+        """Phase X8: real witness-search algorithms by default
+        (`RunSpec.use_witness_search`), falling back to the fixed,
+        hand-verified `DEFAULT_SUBPROGRAM_WITNESSES` set when disabled or
+        when the model has more than one input field (multi-field
+        subprograms aren't yet wired into SubprogramOrchestrator's
+        single-scalar witness API -- see witness_search.witnesses_for_subprogram)."""
+        if not self.base_spec.use_witness_search or len(model.input_params) != 1:
+            return DEFAULT_SUBPROGRAM_WITNESSES
+        from weaver.agent.subprogram_verify import make_oracle_fn
+        from weaver.agent.witness_search import witnesses_for_subprogram
+
+        oracle_fn = make_oracle_fn(model, program_work_dir / "witness_search_oracle")
+        # Small per-algorithm budget: each witness costs one real cobc +
+        # one real javac/java round trip inside the repair loop, so the
+        # union of six algorithms must stay a modest multiple of the old
+        # fixed 6-value set, not an unbounded search.
+        witnesses = witnesses_for_subprogram(model, oracle_fn, seed=self.base_spec.seed, per_algorithm_budget=3)
+        return witnesses or DEFAULT_SUBPROGRAM_WITNESSES
+
     def _run_subprogram(self, program_name: str, cobol_file: Path) -> None:
         from weaver.agent import unit_cache
         from weaver.agent.subprogram_orchestrator import SubprogramOrchestrator
@@ -148,9 +168,12 @@ class LeafOrchestrator:
         from weaver.cobol.subprogram import load_subprogram
 
         program_work_dir = self.work_root / program_name
+        model = load_subprogram(cobol_file)
+        witnesses = self._witnesses_for(model, program_work_dir)
+
         orch = SubprogramOrchestrator(
             cobol_source=cobol_file,
-            witnesses=DEFAULT_SUBPROGRAM_WITNESSES,
+            witnesses=witnesses,
             spec=self.base_spec,
             trace_path=program_work_dir / "trace.jsonl",
             work_dir=program_work_dir / "verify",
@@ -160,10 +183,9 @@ class LeafOrchestrator:
 
         if result.status != "committed":
             return
-        model = load_subprogram(cobol_file)
         program_source = model.source_path.read_text(encoding="utf-8")
         fixtures = harvest_subprogram_fixtures(
-            model, DEFAULT_SUBPROGRAM_WITNESSES, program_work_dir / "harvest"
+            model, witnesses, program_work_dir / "harvest"
         )
         cache_dir = self.work_root / "unit_cache"
         key = unit_cache.cache_key(program_source, model.paragraph_source)

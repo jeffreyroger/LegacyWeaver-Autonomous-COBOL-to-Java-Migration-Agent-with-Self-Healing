@@ -172,6 +172,160 @@ def _compile_candidate_driver(model, candidate_method_body: str, work_dir: Path)
     return None
 
 
+def _cobol_driver_source_multi(model) -> str:
+    """Phase X8 generalization of `_cobol_driver_source` to N input
+    LINKAGE parameters, one output (this repo's disclosed USING-order
+    convention -- see `weaver/cobol/subprogram.py`)."""
+    decls = []
+    accepts = []
+    for i, p in enumerate(model.input_params):
+        w, s = _raw_width(p), p.decimal_scale
+        decls.append(f"       01  WS-IN-{i}-RAW                PIC 9({w}).")
+        decls.append(f"       01  WS-IN-{i} REDEFINES WS-IN-{i}-RAW  PIC 9({w - s})V9({s}).")
+        accepts.append(f"           ACCEPT WS-IN-{i}-RAW")
+    out = model.output_params[0]
+    out_w, out_s = _raw_width(out), out.decimal_scale
+    decls.append(f"       01  WS-OUTPUT-RAW               PIC 9({out_w}).")
+    decls.append(f"       01  WS-OUTPUT REDEFINES WS-OUTPUT-RAW PIC 9({out_w - out_s})V9({out_s}).")
+    using_args = " ".join(f"WS-IN-{i}" for i in range(len(model.input_params))) + " WS-OUTPUT"
+    return f"""\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DRIVER.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+{chr(10).join(decls)}
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+{chr(10).join(accepts)}
+           CALL "{model.program_id}" USING {using_args}
+           DISPLAY WS-OUTPUT-RAW
+           STOP RUN.
+"""
+
+
+def _java_driver_source_multi(class_name: str, model) -> str:
+    out = model.output_params[0]
+    reads, args = [], []
+    for i, p in enumerate(model.input_params):
+        reads.append(
+            f'        java.math.BigDecimal in{i} = new java.math.BigDecimal('
+            f'new java.math.BigInteger(br.readLine().trim())).movePointLeft({p.decimal_scale});'
+        )
+        args.append(f"in{i}")
+    return f"""\
+public final class Driver {{
+    public static void main(String[] args) throws Exception {{
+        java.io.BufferedReader br = new java.io.BufferedReader(
+            new java.io.InputStreamReader(System.in));
+{chr(10).join(reads)}
+        java.math.BigDecimal output = {class_name}.mainPara({", ".join(args)});
+        java.math.BigDecimal scaled = output.movePointRight({out.decimal_scale}).setScale(0, java.math.RoundingMode.UNNECESSARY);
+        System.out.println(String.format("%0{_raw_width(out)}d", scaled.longValueExact()));
+    }}
+}}
+"""
+
+
+def _compile_oracle_driver_multi(model, work_dir: Path, *, via_wsl: bool) -> str | None:
+    work_dir.mkdir(parents=True, exist_ok=True)
+    module_src = work_dir / model.source_path.name
+    module_src.write_text(model.source_path.read_text(encoding="utf-8"), encoding="utf-8")
+    (work_dir / "driver.cob").write_text(_cobol_driver_source_multi(model), encoding="utf-8")
+
+    result = _run(["cobc", "-m", module_src.name, "-o", f"{model.program_id}.so"], work_dir, "", via_wsl=via_wsl)
+    if result.returncode != 0:
+        return f"cobc -m failed:\n{result.stdout}\n{result.stderr}"
+    result = _run(["cobc", "-x", "driver.cob", "-o", "driver"], work_dir, "", via_wsl=via_wsl)
+    if result.returncode != 0:
+        return f"cobc -x failed:\n{result.stdout}\n{result.stderr}"
+    return None
+
+
+def _compile_candidate_driver_multi(model, candidate_method_body: str, work_dir: Path) -> str | None:
+    from weaver.agent.subprogram_scaffold import _class_name, generate as generate_scaffold
+
+    work_dir.mkdir(parents=True, exist_ok=True)
+    class_name = _class_name(model.program_id)
+    scaffold_source = generate_scaffold(model, method_body=candidate_method_body)
+    (work_dir / f"{class_name}.java").write_text(scaffold_source, encoding="utf-8")
+    (work_dir / "Driver.java").write_text(_java_driver_source_multi(class_name, model), encoding="utf-8")
+    result = subprocess.run(
+        ["javac", "-d", ".", f"{class_name}.java", "Driver.java"],
+        cwd=work_dir, capture_output=True, text=True, timeout=TIMEOUT_SECONDS,
+    )
+    if result.returncode != 0:
+        return f"javac failed:\n{result.stdout}\n{result.stderr}"
+    return None
+
+
+def make_oracle_fn(model, work_dir: Path):
+    """Builds a `weaver.agent.witness_search.OracleFn` -- real, currently-
+    compiled `cobc` oracle only, never fabricated (Non-Negotiable Design
+    Decision 3). Compiles the oracle driver once; each call runs it
+    against one witness record (`{field_name: Decimal}`) and returns
+    `{output_field_name: Decimal}`."""
+    via_wsl = _via_wsl()
+    oracle_dir = work_dir / "oracle_for_search"
+    error = _compile_oracle_driver_multi(model, oracle_dir, via_wsl=via_wsl)
+    if error is not None:
+        raise RuntimeError(f"witness-search oracle setup failed: {error}")
+    out = model.output_params[0]
+
+    def oracle_fn(witness: dict) -> dict:
+        raw_lines = "".join(
+            _to_raw(witness[p.name], _raw_width(p), p.decimal_scale) + "\n" for p in model.input_params
+        )
+        proc = _run(["./driver"], oracle_dir, raw_lines, via_wsl=via_wsl)
+        raw_out = proc.stdout.strip()
+        if len(raw_out) != _raw_width(out) or not raw_out.isdigit():
+            raise RuntimeError(f"oracle produced no valid output for {witness} (stdout={proc.stdout!r} stderr={proc.stderr!r})")
+        return {out.name: _from_raw(raw_out, out.decimal_scale)}
+
+    return oracle_fn
+
+
+def verify_subprogram_multi(model, candidate_method_body: str, witnesses: list[dict],
+                             work_dir: Path) -> SubprogramVerifyResult:
+    """Phase X8: N-input-field generalization of `verify_subprogram`.
+    Same byte-for-byte comparison contract, over a list of witness
+    records (`{field_name: Decimal}`) instead of a single scalar."""
+    via_wsl = _via_wsl()
+    oracle_dir = work_dir / "oracle"
+    candidate_dir = work_dir / "candidate"
+
+    oracle_error = _compile_oracle_driver_multi(model, oracle_dir, via_wsl=via_wsl)
+    if oracle_error is not None:
+        return SubprogramVerifyResult(compiled=False, compile_error=f"oracle: {oracle_error}")
+    candidate_error = _compile_candidate_driver_multi(model, candidate_method_body, candidate_dir)
+    if candidate_error is not None:
+        return SubprogramVerifyResult(compiled=False, compile_error=f"candidate: {candidate_error}")
+
+    out = model.output_params[0]
+    divergences: list[SubprogramDivergence] = []
+    for witness in witnesses:
+        raw_lines = "".join(
+            _to_raw(witness[p.name], _raw_width(p), p.decimal_scale) + "\n" for p in model.input_params
+        )
+        oracle_proc = _run(["./driver"], oracle_dir, raw_lines, via_wsl=via_wsl)
+        oracle_raw = oracle_proc.stdout.strip()
+        oracle_out = _from_raw(oracle_raw, out.decimal_scale) if oracle_raw else None
+
+        candidate_proc = subprocess.run(
+            ["java", "-cp", ".", "Driver"], cwd=candidate_dir, input=raw_lines,
+            capture_output=True, text=True, timeout=TIMEOUT_SECONDS,
+        )
+        candidate_raw = candidate_proc.stdout.strip()
+        candidate_out = _from_raw(candidate_raw, out.decimal_scale) if candidate_raw else None
+
+        if oracle_raw != candidate_raw:
+            representative_input = next(iter(witness.values())) if witness else Decimal(0)
+            divergences.append(SubprogramDivergence(representative_input, oracle_out, candidate_out))
+
+    return SubprogramVerifyResult(compiled=True, divergences=tuple(divergences))
+
+
 def verify_subprogram(model, candidate_method_body: str, witnesses: list[Decimal],
                        work_dir: Path) -> SubprogramVerifyResult:
     """Real byte-for-byte parity check over `witnesses` (Phase X3's
@@ -294,4 +448,5 @@ def verify_subprogram_from_cache(model, candidate_method_body: str, cache, work_
 __all__ = [
     "SubprogramDivergence", "SubprogramVerifyResult", "verify_subprogram",
     "harvest_subprogram_fixtures", "verify_subprogram_from_cache",
+    "verify_subprogram_multi", "make_oracle_fn",
 ]

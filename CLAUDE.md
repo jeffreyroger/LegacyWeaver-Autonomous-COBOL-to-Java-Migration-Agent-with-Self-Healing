@@ -185,6 +185,19 @@ harness, not as a replacement for it.
     `WEAVER_COBC_VIA_WSL`, and no other module may gain a WSL branch
     without its own disclosed exception here.
 
+    **Scoped live-connector exception (2026-08-20, migration-framework-spec.md
+    Section 4.2, Phase Z2):** `tests/test_connectors_live.py` may start local
+    Docker containers (`postgres`, `rabbitmq`) and make real network calls to
+    them, and may compile/run `weaver/agent/connector_codegen.py`'s generated
+    `RabbitMqQueue.java`/`PostgresDataSource.java` adapters against a jar
+    directory named by `WEAVER_CONNECTOR_CLASSPATH`. This is opt-in only
+    (`WEAVER_LIVE_CONNECTORS=1` in the environment) and is a separate,
+    explicitly-invoked test lane — `weaver verify`/`weaver migrate`/`weaver
+    connectors` never read this flag and never open a socket. Every
+    parity-gate verification binds `OfflineAdapters.java` only (Phase Z1's
+    deterministic `MockMap`, reused verbatim). Nothing else may read
+    `WEAVER_LIVE_CONNECTORS` or `WEAVER_CONNECTOR_CLASSPATH`.
+
 11. **Baseline defects are declared, not hidden (FR-8).** Any change to
     `baseline/Baseline.java` must keep its header comment accurate — it must
     enumerate every deviation the file actually contains, no more, no less.

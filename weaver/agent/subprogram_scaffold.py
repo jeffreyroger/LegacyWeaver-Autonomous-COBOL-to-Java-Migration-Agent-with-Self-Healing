@@ -36,7 +36,9 @@ def generate(model: SubprogramModel, method_body: str | None = None) -> str:
     """
     class_name = _class_name(model.program_id)
     method_name = java_method_name(model.paragraph_id)
-    input_name = java_field_name(model.input_param.name)
+    params = ", ".join(
+        f"java.math.BigDecimal {java_field_name(p.name)}" for p in model.input_params
+    )
 
     if method_body is None:
         body = (
@@ -54,7 +56,7 @@ def generate(model: SubprogramModel, method_body: str | None = None) -> str:
     return f"""\
 public final class {class_name} {{
 
-    public static java.math.BigDecimal {method_name}(java.math.BigDecimal {input_name}) {{
+    public static java.math.BigDecimal {method_name}({params}) {{
 {body}
     }}
 }}

@@ -289,6 +289,58 @@ replacement of the existing `== 2` path.
 
 ---
 
+### X8 — Generic Witness Search (2026-08-20, stretch beyond X7)
+
+**Deliverable:** the six witness-search algorithms `migration-framework-spec.md`
+§5.2 Step 2 names (pairwise, three-way, Latin hypercube, adaptive random,
+MAP-Elites, UCB1 bandit), previously declared explicitly out of scope
+(§1 above), implemented for real in `weaver/agent/witness_search.py` —
+generic over any list of `FieldDomain`s, never hardcoded to `LEAF-A`/
+`LEAF-B` or any other specific `.cob` file. Two adapters:
+`witnesses_for_subprogram()` (any `SubprogramModel`, any input-field count)
+and `witnesses_for_program()` (any `ScaffoldSpec.input_layout`, full
+file-based programs, synthetic records via `weaver/agent/synthetic_records.py`).
+
+**Companion widening:** `weaver/cobol/subprogram.py`'s LINKAGE grammar,
+previously fixed at exactly one input + one output field, now accepts
+N >= 1 input fields plus one output field (the last USING parameter),
+still raising `UnsupportedSubprogramError` for anything else —
+`SubprogramModel.input_params`/`.output_params` are now tuples;
+`.input_param`/`.output_param` remain as back-compat singular accessors
+for the N=1 shape `LEAF-A`/`LEAF-B` and `SubprogramOrchestrator` still use.
+`weaver/agent/subprogram_verify.py` gained N-input real oracle/candidate
+drivers (`verify_subprogram_multi`, `make_oracle_fn`) alongside the
+original singular-field functions, which are unchanged.
+
+**Disclosed scope adaptation:** the spec describes these algorithms via
+compound-`IF` branch coverage; this repo's paragraphs are single
+statements (Phase X1's narrow grammar), so MAP-Elites/UCB1's real
+execution-feedback signal is oracle *output shape* (sign/zero/saturation
+of a real `cobc` run) rather than an instrumented branch trace — real,
+distinct, execution-driven work over this project's actual verification
+surface, not a fabrication of coverage numbers.
+
+**Wiring:** `RunSpec.use_witness_search` (default `True`) — `LeafOrchestrator`
+uses the real algorithms by default for N=1-input subprograms (a small
+per-algorithm budget, since each witness costs a real cobc+javac round
+trip), falling back to the fixed `DEFAULT_SUBPROGRAM_WITNESSES` set when
+disabled or for N>1 subprograms not yet wired into `SubprogramOrchestrator`'s
+single-scalar witness API. `Orchestrator`'s full-program adapter
+(`witnesses_for_program`/`synthetic_records.py`) exists and is tested
+against `interest.cob`'s real `INPUT_LAYOUT`; wiring it as an *additional*
+verification step in `weaver/agent/orchestrator.py` (never replacing the
+real recorded fixture files) is a followup, not yet done.
+
+**Exit criteria (met):** `tests/test_witness_search.py` (all six
+algorithms, synthetic domains, no `.cob` file hardcoded), `tests/test_cobol_subprogram_multifield.py`
+(widened grammar parses a new synthetic 2-input fixture and drives a real
+`verify_subprogram_multi` parity check), `tests/test_synthetic_records.py`
+(real `interest.cob` INPUT_LAYOUT, real cobc compile), `tests/test_leaf_orchestrator_witness_search.py`
+(searched witnesses reach the same real zero-divergence commit the fixed
+set already proved). Full suite: no regressions versus the pre-X8 baseline.
+
+---
+
 ## 4. Milestones Table
 
 | ID | Deliverable | Depends on | Exit criteria |

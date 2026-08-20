@@ -45,7 +45,10 @@ def test_interest_cob_has_file_io_and_is_rejected():
         )
 
 
-def test_more_than_two_linkage_params_rejected(tmp_path):
+def test_multiple_linkage_params_last_is_output(tmp_path):
+    # Phase X8 generalization: N >= 2 USING params are accepted; the last
+    # is the output, every other one is an input (disclosed convention --
+    # COBOL syntax itself carries no input/output direction marker).
     source = """\
        IDENTIFICATION DIVISION.
        PROGRAM-ID. THREE-PARAM.
@@ -62,6 +65,27 @@ def test_more_than_two_linkage_params_rejected(tmp_path):
            GOBACK.
 """
     path = tmp_path / "three_param.cob"
+    path.write_text(source)
+    model = load_subprogram(path)
+    assert [f.name for f in model.input_params] == ["P-A", "P-B"]
+    assert [f.name for f in model.output_params] == ["P-C"]
+
+
+def test_single_linkage_param_rejected(tmp_path):
+    source = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. ONE-PARAM.
+
+       DATA DIVISION.
+       LINKAGE SECTION.
+       01  P-ONLY                 PIC 9(5)V99.
+
+       PROCEDURE DIVISION USING P-ONLY.
+       MAIN-PARA.
+           MOVE ZERO TO P-ONLY
+           GOBACK.
+"""
+    path = tmp_path / "one_param.cob"
     path.write_text(source)
     with pytest.raises(UnsupportedSubprogramError):
         load_subprogram(path)

@@ -1,10 +1,15 @@
 """LINKAGE SECTION subprogram frontend — Phase X1
 (docs/specs/SUBPROGRAM_VERIFICATION_PLAN.md).
 
-Parses the narrow subprogram shape `fixtures/cobol/multiprog/leaf_a.cob`/
-`leaf_b.cob` use: one `PROGRAM-ID`, a `LINKAGE SECTION` with exactly two
-numeric elementary items (input, then output, matching `PROCEDURE DIVISION
-USING`'s order), and exactly one paragraph.
+Parses the subprogram shape `fixtures/cobol/multiprog/leaf_a.cob`/
+`leaf_b.cob` use, generalized in Phase X8 to any number of LINKAGE
+parameters: one `PROGRAM-ID`, a `LINKAGE SECTION` with N >= 2 numeric
+elementary items in `PROCEDURE DIVISION USING` order, and exactly one
+paragraph. By this repo's disclosed convention (Phase X8, no COBOL syntax
+marks input vs output direction), the last USING parameter is the output;
+every other USING parameter is an input -- LEAF-A/LEAF-B's original
+one-input/one-output shape is the N=2 special case and is unchanged by
+this generalization.
 
 Non-Negotiable Design Decision 1 (SUBPROGRAM_VERIFICATION_PLAN.md §2):
 `weaver/cobol/frontend.py`'s existing, hardened, file-based contract is
@@ -13,8 +18,8 @@ different program shape, reusing `data_division.py`'s PIC-parsing and
 `segment.py`'s paragraph-splitting machinery unchanged, exactly the way
 `frontend.py` itself already does.
 
-Anything outside the narrow shape above (an FD, a FILE-CONTROL, more than
-two LINKAGE items, a non-numeric item, more than one paragraph) raises
+Anything outside the shape above (an FD, a FILE-CONTROL, fewer than two
+LINKAGE items, a non-numeric item, more than one paragraph) raises
 `UnsupportedSubprogramError` -- never guessed at (Non-Negotiable Design
 Decision 4).
 """
@@ -55,10 +60,30 @@ class UnsupportedSubprogramError(ValueError):
 class SubprogramModel:
     program_id: str
     source_path: Path
-    input_param: Field
-    output_param: Field
+    input_params: tuple[Field, ...]
+    output_params: tuple[Field, ...]
     paragraph_id: str
     paragraph_source: str
+
+    @property
+    def input_param(self) -> Field:
+        """Back-compat accessor for the N=2 (one input, one output) shape
+        LEAF-A/LEAF-B and pre-Phase-X8 callers use."""
+        if len(self.input_params) != 1:
+            raise ValueError(
+                f"{self.program_id} has {len(self.input_params)} input params; "
+                "use input_params, not the singular input_param accessor"
+            )
+        return self.input_params[0]
+
+    @property
+    def output_param(self) -> Field:
+        if len(self.output_params) != 1:
+            raise ValueError(
+                f"{self.program_id} has {len(self.output_params)} output params; "
+                "use output_params, not the singular output_param accessor"
+            )
+        return self.output_params[0]
 
 
 def _using_params(stmt_text: str) -> list[str]:
@@ -71,10 +96,10 @@ def _using_params(stmt_text: str) -> list[str]:
     tokens = stmt_text.split()
     using_idx = [t.upper() for t in tokens].index("USING")
     params = tokens[using_idx + 1 :]
-    if len(params) != 2:
+    if len(params) < 2:
         raise UnsupportedSubprogramError(
-            f"Phase X1 models exactly two USING parameters (input, output); "
-            f"found {len(params)} ({params}): {stmt_text!r}"
+            f"a subprogram needs at least one input and one output USING "
+            f"parameter; found {len(params)} ({params}): {stmt_text!r}"
         )
     return [p.upper() for p in params]
 
@@ -136,10 +161,11 @@ def load_subprogram(cobol_source: Path) -> SubprogramModel:
     except UnsupportedDataItemError as exc:
         raise UnsupportedSubprogramError(f"{cobol_source}: {exc}") from exc
 
-    if len(linkage_roots) != 2:
+    if len(linkage_roots) < 2:
         raise UnsupportedSubprogramError(
-            f"{cobol_source}: Phase X1 models exactly two LINKAGE SECTION items, "
-            f"found {len(linkage_roots)} ({[r.name for r in linkage_roots]})"
+            f"{cobol_source}: a subprogram needs at least two LINKAGE SECTION "
+            f"items (one input, one output), found {len(linkage_roots)} "
+            f"({[r.name for r in linkage_roots]})"
         )
 
     fields_by_name: dict[str, Field] = {}
@@ -163,8 +189,11 @@ def load_subprogram(cobol_source: Path) -> SubprogramModel:
             f"{cobol_source}: PROCEDURE DIVISION USING names {missing} not declared "
             f"in LINKAGE SECTION ({list(fields_by_name)})"
         )
-    input_param = fields_by_name[using_params[0]]
-    output_param = fields_by_name[using_params[1]]
+    # Disclosed convention (Phase X8): the last USING parameter is the
+    # output, every other USING parameter is an input -- COBOL's own
+    # syntax carries no input/output direction marker.
+    input_params = tuple(fields_by_name[p] for p in using_params[:-1])
+    output_params = (fields_by_name[using_params[-1]],)
 
     paragraphs = segment(text)
     if len(paragraphs) != 1:
@@ -177,8 +206,8 @@ def load_subprogram(cobol_source: Path) -> SubprogramModel:
     return SubprogramModel(
         program_id=program_id,
         source_path=cobol_source,
-        input_param=input_param,
-        output_param=output_param,
+        input_params=input_params,
+        output_params=output_params,
         paragraph_id=unit.identifier,
         paragraph_source=unit.source,
     )

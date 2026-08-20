@@ -99,6 +99,29 @@ def repair_unit(
             classification: Classification = best_result.classifications[0]
             failing_div = best_result.report.divergences[0]
             defect_class = classification.defect_class
+
+            # --- Phase Y1: delta debugging picks a proven-minimal
+            # counterexample instead of arbitrarily using divergences[0] ---
+            if spec.use_delta_debugging and best_result.build_dir is not None:
+                same_field_indices = [
+                    d.record_index for d in best_result.report.divergences if d.field_name == failing_div.field_name
+                ]
+                if len(same_field_indices) > 1:
+                    from weaver.agent.input_minimize import minimize_divergent_records
+
+                    input_lines = spec.input_data.read_text(encoding="utf-8").splitlines()
+                    golden_lines = spec.golden_output.read_text(encoding="utf-8").splitlines()
+                    try:
+                        counterexample = minimize_divergent_records(
+                            "Scaffold", best_result.build_dir, input_lines, golden_lines,
+                            same_field_indices, failing_div.field_name, spec.scaffold_spec.report_layout,
+                            work_dir / f"delta_debug_{attempt_number}",
+                            input_file_name=spec.scaffold_spec.input_file,
+                            output_file_name=spec.scaffold_spec.output_file,
+                        )
+                        failing_div = counterexample.divergence
+                    except Exception:
+                        pass  # never let minimization itself block a repair attempt
             target_scale = scaffold_field_scale(spec.scaffold_spec, failing_div.field_name)
             patch = try_deterministic_repair(defect_class, best_body, target_scale)
             patch_body = patch.patched_body if patch else None

@@ -82,6 +82,18 @@ def build_parser() -> argparse.ArgumentParser:
     migrate.add_argument("--json", action="store_true",
                          help="Emit machine-readable JSON instead of streaming status")
 
+    # Phase Z2 (migration-framework-spec.md Section 4.2): generate real
+    # PostgreSQL/RabbitMQ/REST connector code + deployment descriptors for
+    # every EXEC SQL/EXEC CICS directive in a subprogram. Migration output
+    # only -- never invoked by verify/migrate, never touches a network
+    # (CLAUDE.md rule 10).
+    connectors = sub.add_parser(
+        "connectors", help="Generate connector adapters + deployment descriptors for a mocked subprogram"
+    )
+    connectors.add_argument("cobol_source", type=Path, help="Subprogram COBOL source (LINKAGE SECTION shape)")
+    connectors.add_argument("--out-dir", type=Path, default=None,
+                            help="Output directory (default: generated/connectors/<PROGRAM-ID>)")
+
     original_parse_args = parser.parse_args
 
     def parse_args(args=None, namespace=None):
@@ -392,6 +404,33 @@ def run_migrate(args: argparse.Namespace) -> int:
     return exit_code
 
 
+def run_connectors(args: argparse.Namespace) -> int:
+    from weaver.agent.connector_codegen import generate_connectors
+    from weaver.agent.connector_map import UnsupportedConnectorError, map_directives
+    from weaver.cobol.mock_directives import UnsupportedMockDirectiveError, find_mock_directives
+    from weaver.cobol.subprogram import load_subprogram
+
+    try:
+        model = load_subprogram(args.cobol_source)
+        full_source = model.source_path.read_text(encoding="utf-8")
+        directives = find_mock_directives(full_source)
+        if not directives:
+            console.print(f"[yellow]{args.cobol_source} has no EXEC SQL/EXEC CICS directives -- nothing to generate.[/yellow]")
+            return 0
+        bindings = map_directives(directives)
+    except (UnsupportedMockDirectiveError, UnsupportedConnectorError) as e:
+        console.print(f"[red]{e}[/red]")
+        return 1
+
+    out_dir = args.out_dir or Path("generated") / "connectors" / model.program_id
+    written = generate_connectors(model, bindings, out_dir)
+
+    console.print(f"[green]Generated {len(written)} artefact(s) for {model.program_id} in {out_dir}:[/green]")
+    for path in written:
+        console.print(f"  {path}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -402,6 +441,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_report(args)
     if args.command == "migrate":
         return run_migrate(args)
+    if args.command == "connectors":
+        return run_connectors(args)
     parser.print_help()
     return 2
 
