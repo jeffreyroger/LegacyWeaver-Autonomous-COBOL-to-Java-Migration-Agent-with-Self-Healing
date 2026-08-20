@@ -34,7 +34,7 @@ be proven end-to-end yet, for a disclosed reason — not the same as untouched.
 | X4 | `weaver/agent/subprogram_orchestrator.py` — synthesis + repair wiring | ✅ real, unassisted local Ollama synthesis commits `LEAF-A` and `LEAF-B` with 0 divergences (proven 2026-08-20 via Ollama running in WSL) |
 | X5 | Real `UnitCache` harvest for a subprogram leaf | ✅ |
 | X6 | `LeafOrchestrator` real dispatch (`_program_kind`, no fake factory) | ✅ real end-to-end run proven: `LEAF-A`/`LEAF-B` commit for real via Ollama before `ROOT`, real `UnitCache` dir created, Task 8's fake-orchestrator tests still pass unmodified |
-| X7 | `ROOT.cob` totals-optional frontend relaxation + resolved `CALL` translation (stretch) | ❌ not started |
+| X7 | `ROOT.cob` totals-optional frontend relaxation + resolved `CALL` translation (stretch) | ✅ real, unassisted Ollama synthesis resolves both `CALL "LEAF-A"`/`CALL "LEAF-B"`; assembled 3-program Java translation matches `golden_multiprog.out` byte-for-byte, 0 divergences |
 
 ---
 
@@ -60,8 +60,17 @@ at `127.0.0.1:11434` unchanged, satisfying `inference.py`'s loopback-only
 guarantee. A `wsl --shutdown` + restart was needed once to unstick flaky
 port forwarding. X4 and X6's real-synthesis exit criteria both pass now.
 
-## Only outstanding item
+## All planned phases complete
 
-X7 (stretch) — `ROOT.cob`'s totals-optional frontend relaxation and
-resolved `CALL` translation. Not started; not required for X1–X6 to stand
-on their own.
+Phase W (8/8) and Phase X (X1–X7, including the X7 stretch phase) are all
+built and proven for real: real `cobc`/`javac` compilation, real
+unassisted local Ollama synthesis, real byte-for-byte comparison against
+frozen golden outputs. Two genuine prompt-quality bugs were found and
+fixed along the way during X7 (see commit `e1f83b0`): a broken
+"write to ws." prohibition text for totals-optional programs, and a
+missing worked example for cross-class CALL resolution that caused the
+deterministic (temperature=0) model to repeatedly return an empty body.
+
+Only the "Explicitly out of scope" roadmap items above remain — each
+requires its own new spec/plan before any code, per CLAUDE.md's
+scope discipline.
