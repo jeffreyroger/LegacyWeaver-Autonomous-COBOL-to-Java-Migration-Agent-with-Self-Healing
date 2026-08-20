@@ -215,4 +215,83 @@ def verify_subprogram(model, candidate_method_body: str, witnesses: list[Decimal
     return SubprogramVerifyResult(compiled=True, divergences=tuple(divergences))
 
 
-__all__ = ["SubprogramDivergence", "SubprogramVerifyResult", "verify_subprogram"]
+def harvest_subprogram_fixtures(model, witnesses: list[Decimal], work_dir: Path):
+    """Phase X5: run ONLY the real oracle side once per witness and return
+    the resulting `UnitFixture`s -- GRAPH_PLAN.md M5's "harvest once"
+    discipline, applied to a subprogram's call boundary instead of a
+    paragraph's file-record boundary. Every fixture's output_state comes
+    from a real, currently-compiled `cobc` run (Non-Negotiable Design
+    Decision 3) -- never inferred from `verify_subprogram`'s candidate
+    side.
+    """
+    from weaver.agent.trace_harvest import UnitFixture
+
+    via_wsl = _via_wsl()
+    oracle_dir = work_dir / "oracle"
+    oracle_error = _compile_oracle_driver(model, oracle_dir, via_wsl=via_wsl)
+    if oracle_error is not None:
+        raise RuntimeError(f"harvest failed: oracle: {oracle_error}")
+
+    in_scale = model.input_param.decimal_scale
+    in_width = _raw_width(model.input_param)
+    out_width = _raw_width(model.output_param)
+
+    fixtures = []
+    for index, witness in enumerate(witnesses):
+        raw_in = _to_raw(witness, in_width, in_scale)
+        oracle_proc = _run(["./driver"], oracle_dir, raw_in + "\n", via_wsl=via_wsl)
+        oracle_raw = oracle_proc.stdout.strip()
+        if len(oracle_raw) != out_width or not oracle_raw.isdigit():
+            raise RuntimeError(
+                f"harvest failed: oracle produced no valid output for witness {witness} "
+                f"(stdout={oracle_proc.stdout!r} stderr={oracle_proc.stderr!r})"
+            )
+        fixtures.append(UnitFixture(
+            paragraph_id=model.paragraph_id,
+            record_index=index,
+            input_state={model.input_param.name: raw_in},
+            output_state={model.output_param.name: oracle_raw},
+        ))
+    return fixtures
+
+
+def verify_subprogram_from_cache(model, candidate_method_body: str, cache, work_dir: Path
+                                  ) -> SubprogramVerifyResult:
+    """Phase X5 fast path: compiles and runs ONLY the candidate side,
+    comparing against `cache`'s already-harvested real oracle outputs --
+    never re-invoking `cobc`. Falls back to nothing itself (AC-17's
+    posture, GRAPH_PLAN.md M8): the caller decides what to do on a cache
+    miss/mismatch, this function only ever consumes a cache it was
+    already handed."""
+    candidate_dir = work_dir / "candidate"
+    candidate_error = _compile_candidate_driver(model, candidate_method_body, candidate_dir)
+    if candidate_error is not None:
+        return SubprogramVerifyResult(compiled=False, compile_error=f"candidate: {candidate_error}")
+
+    in_scale = model.input_param.decimal_scale
+    out_scale = model.output_param.decimal_scale
+
+    divergences: list[SubprogramDivergence] = []
+    for fixture in cache.fixtures:
+        raw_in = fixture.input_state[model.input_param.name]
+        oracle_raw = fixture.output_state[model.output_param.name]
+        witness = _from_raw(raw_in, in_scale)
+        oracle_out = _from_raw(oracle_raw, out_scale)
+
+        candidate_proc = subprocess.run(
+            ["java", "-cp", ".", "Driver"], cwd=candidate_dir, input=raw_in + "\n",
+            capture_output=True, text=True, timeout=TIMEOUT_SECONDS,
+        )
+        candidate_raw = candidate_proc.stdout.strip()
+        candidate_out = _from_raw(candidate_raw, out_scale) if candidate_raw else None
+
+        if oracle_raw != candidate_raw:
+            divergences.append(SubprogramDivergence(witness, oracle_out, candidate_out))
+
+    return SubprogramVerifyResult(compiled=True, divergences=tuple(divergences))
+
+
+__all__ = [
+    "SubprogramDivergence", "SubprogramVerifyResult", "verify_subprogram",
+    "harvest_subprogram_fixtures", "verify_subprogram_from_cache",
+]
