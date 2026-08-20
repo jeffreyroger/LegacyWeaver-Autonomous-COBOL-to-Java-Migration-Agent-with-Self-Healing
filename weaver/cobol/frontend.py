@@ -286,16 +286,24 @@ def load_program(cobol_source: Path, copybook_dir: Path | None = None) -> Progra
             f"found {len(input_records)}"
         )
     output_records = _records_for(part, output_files[0])
-    if len(output_records) != 2:
+    # Phase X7 (docs/specs/SUBPROGRAM_VERIFICATION_PLAN.md): a totals line
+    # is now optional -- one 01-level (detail line only) is accepted in
+    # addition to the original two (detail line then totals line). This
+    # is a new, additive branch; every existing fixture always declares
+    # two 01-levels and so always takes the exact code path it always
+    # took (has_totals=True below), unchanged.
+    if len(output_records) not in (1, 2):
         raise UnsupportedProgramError(
-            f"output FD {output_files[0]} must declare exactly two 01-levels "
-            f"(detail line then totals line), found {len(output_records)}"
+            f"output FD {output_files[0]} must declare one 01-level (detail "
+            f"line only) or two 01-levels (detail line then totals line), "
+            f"found {len(output_records)}"
         )
+    has_totals = len(output_records) == 2
 
     input_root = input_records[0]
     input_layout = flatten(input_root)
     report_layout = flatten(output_records[0])
-    totals_layout = flatten(output_records[1])
+    totals_layout = flatten(output_records[1]) if has_totals else ()
 
     ws_roots = parse_items(part.working_storage)
     ws_items = tuple(item for root in ws_roots for item in elementary_items(root))
@@ -310,10 +318,14 @@ def load_program(cobol_source: Path, copybook_dir: Path | None = None) -> Progra
     ws_name_set = set(ws_names)
 
     report_ctor_map = _ctor_map(unit.source, report_layout, input_fields, ws_name_set)
-    totals_ctor_map = _ctor_map(driver.source, totals_layout, input_fields, ws_name_set)
-    accumulator_field, per_record_field = _accumulator(
-        unit.source, ws_name_set, totals_ctor_map
-    )
+    if has_totals:
+        totals_ctor_map = _ctor_map(driver.source, totals_layout, input_fields, ws_name_set)
+        accumulator_field, per_record_field = _accumulator(
+            unit.source, ws_name_set, totals_ctor_map
+        )
+    else:
+        totals_ctor_map = {}
+        accumulator_field, per_record_field = "", ""
 
     return ProgramModel(
         program_id=part.program_id,

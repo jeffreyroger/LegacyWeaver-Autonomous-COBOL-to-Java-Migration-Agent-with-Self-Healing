@@ -450,13 +450,31 @@ def _main_class(spec: ScaffoldSpec) -> str:
         report_ctor_args.append(spec.report_ctor_map[f.name])
     report_ctor = ", ".join(report_ctor_args)
 
-    totals_fields = _base_fields(spec.totals_layout)
-    totals_ctor_args = []
-    for f in totals_fields:
-        if f.name not in spec.totals_ctor_map:
-            raise NotImplementedError(f"no main-loop mapping declared for {f.name}")
-        totals_ctor_args.append(spec.totals_ctor_map[f.name])
-    totals_ctor = ", ".join(totals_ctor_args)
+    # Phase X7 (docs/specs/SUBPROGRAM_VERIFICATION_PLAN.md): a totals line
+    # is optional (frontend.py's has_totals branch). No existing fixture
+    # has an empty totals_layout, so this is a new, additive branch --
+    # every existing spec keeps generating the exact accumulator-update +
+    # TotalsLine-write code it always did.
+    has_totals = bool(spec.totals_layout)
+    if has_totals:
+        totals_fields = _base_fields(spec.totals_layout)
+        totals_ctor_args = []
+        for f in totals_fields:
+            if f.name not in spec.totals_ctor_map:
+                raise NotImplementedError(f"no main-loop mapping declared for {f.name}")
+            totals_ctor_args.append(spec.totals_ctor_map[f.name])
+        totals_ctor = ", ".join(totals_ctor_args)
+        accumulator_line = (
+            f"            ws.{spec.accumulator_field} = "
+            f"ws.{spec.accumulator_field}.add(ws.{spec.per_record_field});\n"
+        )
+        totals_write_block = f"""
+        TotalsLine tl = new TotalsLine({totals_ctor});
+        out.append(rstripSpaces(tl.encode())).append("\\n");
+"""
+    else:
+        accumulator_line = ""
+        totals_write_block = ""
 
     return f"""\
 public class Scaffold {{
@@ -501,16 +519,12 @@ public class Scaffold {{
             String line = String.format("%-" + RECORD_WIDTH + "s", rawLine);
             AccountRecord ar = AccountRecord.decode(line);
             {spec.paragraph_method}(ar, ws);
-            ws.{spec.accumulator_field} = ws.{spec.accumulator_field}.add(ws.{spec.per_record_field});
-
+{accumulator_line}
             ReportLine rl = new ReportLine({report_ctor});
             // GnuCOBOL LINE SEQUENTIAL strips trailing spaces on WRITE.
             out.append(rstripSpaces(rl.encode())).append("\\n");
         }}
-
-        TotalsLine tl = new TotalsLine({totals_ctor});
-        out.append(rstripSpaces(tl.encode())).append("\\n");
-
+{totals_write_block}
         java.nio.file.Files.write(java.nio.file.Paths.get(OUTPUT_FILE),
             out.toString().getBytes(java.nio.charset.StandardCharsets.US_ASCII));
     }}
@@ -544,12 +558,19 @@ def generate(spec: ScaffoldSpec = INTEREST_SPEC) -> str:
         "\n",
         _line_class("ReportLine", spec.report_layout),
         "\n",
-        _line_class("TotalsLine", spec.totals_layout),
-        "\n",
-        _working_storage_class(spec),
-        "\n",
-        _main_class(spec),
     ]
+    # Phase X7: no existing fixture has an empty totals_layout, so this
+    # unconditionally emits TotalsLine for every one of them, unchanged.
+    # An empty totals_layout (ROOT.cob's totals-optional shape) has no
+    # fields to encode -- _main_class already never references TotalsLine
+    # in that case (its own has_totals branch), so the class itself is
+    # skipped rather than emitting a broken zero-field encode().
+    if spec.totals_layout:
+        parts.append(_line_class("TotalsLine", spec.totals_layout))
+        parts.append("\n")
+    parts.append(_working_storage_class(spec))
+    parts.append("\n")
+    parts.append(_main_class(spec))
     return "".join(parts)
 
 
