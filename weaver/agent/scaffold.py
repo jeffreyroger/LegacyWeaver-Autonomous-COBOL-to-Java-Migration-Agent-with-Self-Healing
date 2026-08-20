@@ -62,6 +62,16 @@ class ScaffoldSpec:
     # merely having `redefines` set, because INTEREST_SPEC already proves
     # that assumption is false for a real, currently-shipping fixture.
     redefines_as_subclasses: bool = False
+    # Phase BB1 (docs/specs/... frontend generalization, migration-framework-spec.md):
+    # additional input files beyond the primary one, read in lockstep by
+    # position (record i of file 2 pairs with record i of the primary file
+    # -- no key-matching/merge logic, a disclosed narrower subshape than a
+    # full COBOL MATCH-MERGE). Empty by default -- every ScaffoldSpec
+    # declared before this phase (including INTEREST_SPEC) has exactly one
+    # input file and takes the exact code path it always has.
+    # `extra_input_files[i]` pairs with `extra_input_layouts[i]`.
+    extra_input_files: tuple[str, ...] = ()
+    extra_input_layouts: tuple[tuple[Field, ...], ...] = ()
 
 
 # Declared from the 88-levels in fixtures/cobol/copybooks/ACCOUNT-REC.cpy.
@@ -111,8 +121,23 @@ def ws_cobol_name(java_name: str) -> str:
     return "WS-" + "-".join(p.upper() for p in parts)
 
 
+def extra_record_class_names(spec: ScaffoldSpec) -> tuple[str, ...]:
+    """Phase BB1: deterministic class names for `spec.extra_input_files`,
+    in order -- "InputRecord2", "InputRecord3", ... (index-based, so two
+    extra files can never collide on a derived name the way a
+    field-prefix-derived name could)."""
+    return tuple(f"InputRecord{i + 2}" for i in range(len(spec.extra_input_files)))
+
+
+def extra_record_param_names(spec: ScaffoldSpec) -> tuple[str, ...]:
+    return tuple(f"ar{i + 2}" for i in range(len(spec.extra_input_files)))
+
+
 def java_signature(spec: ScaffoldSpec) -> str:
-    return f"static void {spec.paragraph_method}(AccountRecord ar, WorkingStorage ws)"
+    extra_params = "".join(
+        f", {cls} {param}" for cls, param in zip(extra_record_class_names(spec), extra_record_param_names(spec))
+    )
+    return f"static void {spec.paragraph_method}(AccountRecord ar{extra_params}, WorkingStorage ws)"
 
 
 def ws_accessors(spec: ScaffoldSpec) -> dict[str, str]:
@@ -380,6 +405,45 @@ class AccountRecord {{
 {_redefines_subclasses(input_layout)}"""
 
 
+def _extra_record_class(class_name: str, layout: tuple[Field, ...]) -> str:
+    """Phase BB1: an additional input file's record class -- flattened
+    substring accessors only (reuses `_decode_field_expr`/`_java_field_name`
+    unchanged). Deliberately narrower than `_account_record_class`: no
+    REDEFINES-as-subclasses, no condition-name accessors. A fixture whose
+    extra input file needs either is outside this phase's declared scope
+    (frontend.py raises rather than silently dropping the feature)."""
+    fields = _base_fields(layout)
+    components = []
+    decodes = []
+    for f in fields:
+        jname = _java_field_name(f.name)
+        jtype = "java.math.BigDecimal" if f.numeric else "String"
+        components.append(f"    final {jtype} {jname};")
+        decodes.append(f"                {_decode_field_expr(f)}")
+
+    ctor_params = ", ".join(
+        f"{'java.math.BigDecimal' if f.numeric else 'String'} {_java_field_name(f.name)}" for f in fields
+    )
+    ctor_assigns = "\n".join(f"        this.{_java_field_name(f.name)} = {_java_field_name(f.name)};" for f in fields)
+    decode_args = ",\n".join(decodes)
+
+    return f"""\
+final class {class_name} {{
+{chr(10).join(components)}
+
+    {class_name}({ctor_params}) {{
+{ctor_assigns}
+    }}
+
+    static {class_name} decode(String line) {{
+        return new {class_name}(
+{decode_args}
+        );
+    }}
+}}
+"""
+
+
 def _line_class(class_name: str, layout: tuple[Field, ...]) -> str:
     fields = _base_fields(layout)
     components = []
@@ -432,7 +496,7 @@ final class WorkingStorage {{
 
 def _paragraph_stub(spec: ScaffoldSpec) -> str:
     return f"""\
-    static void {spec.paragraph_method}(AccountRecord ar, WorkingStorage ws) {{
+    {java_signature(spec)} {{
         // PARAGRAPH:{spec.paragraph_id}:BEGIN
         throw new UnsupportedOperationException("{spec.paragraph_id} not yet synthesized");
         // PARAGRAPH:{spec.paragraph_id}:END
@@ -476,12 +540,63 @@ def _main_class(spec: ScaffoldSpec) -> str:
         accumulator_line = ""
         totals_write_block = ""
 
+    # Phase BB1: N >= 1 input files read in lockstep by position (record i
+    # of every extra file pairs with record i of the primary file -- see
+    # ScaffoldSpec.extra_input_files' own comment for why this is a
+    # deliberately narrower subshape than a full key-matching MERGE).
+    # extra_class_names/extra_param_names are both empty when
+    # extra_input_files is empty, so every branch below renders to exactly
+    # what it always rendered to for a single-input-file spec.
+    extra_class_names = extra_record_class_names(spec)
+    extra_param_names = extra_record_param_names(spec)
+    extra_widths = [record_width(layout) for layout in spec.extra_input_layouts]
+
+    extra_consts = "".join(
+        f'    private static final String INPUT_FILE{i + 2} = "{name}";\n'
+        f"    private static final int RECORD_WIDTH{i + 2} = {width};\n"
+        for i, (name, width) in enumerate(zip(spec.extra_input_files, extra_widths))
+    )
+    extra_reads = "".join(
+        f"        java.util.List<String> lines{i + 2} = java.nio.file.Files.readAllLines(\n"
+        f"            java.nio.file.Paths.get(INPUT_FILE{i + 2}), java.nio.charset.StandardCharsets.US_ASCII);\n"
+        for i in range(len(spec.extra_input_files))
+    )
+    extra_length_checks = "".join(
+        f'        if (lines{i + 2}.size() != lines.size()) {{\n'
+        f'            throw new IllegalStateException("INPUT_FILE{i + 2} record count " '
+        f'+ lines{i + 2}.size() + " != primary input record count " + lines.size());\n'
+        f"        }}\n"
+        for i in range(len(spec.extra_input_files))
+    )
+    extra_decodes = "".join(
+        f'            String line{i + 2} = String.format("%-" + RECORD_WIDTH{i + 2} + "s", lines{i + 2}.get(recordIndex));\n'
+        f"            {cls} {param} = {cls}.decode(line{i + 2});\n"
+        for i, (cls, param) in enumerate(zip(extra_class_names, extra_param_names))
+    )
+    extra_call_args = "".join(f", {param}" for param in extra_param_names)
+    has_extra_inputs = bool(spec.extra_input_files)
+
+    # Two loop-header variants, not one conditionally-indexed loop, so a
+    # single-input-file spec (every fixture before Phase BB1) renders the
+    # EXACT foreach-loop text it always has -- tests/test_scaffold_redefines.py
+    # asserts byte-identical generated Java against a frozen capture, and an
+    # indexed-for-loop text change would break that even though the runtime
+    # behavior is equivalent.
+    if has_extra_inputs:
+        loop_header = (
+            "        for (int recordIndex = 0; recordIndex < lines.size(); recordIndex++) {\n"
+            "            String rawLine = lines.get(recordIndex);\n"
+        )
+    else:
+        loop_header = "        for (String rawLine : lines) {\n"
+    paragraph_call = f"            {spec.paragraph_method}(ar{extra_call_args}, ws);"
+
     return f"""\
 public class Scaffold {{
     private static final String INPUT_FILE = "{spec.input_file}";
     private static final String OUTPUT_FILE = "{spec.output_file}";
     private static final int RECORD_WIDTH = {input_width};
-
+{extra_consts}
     static java.math.BigDecimal decodeUnsigned(String digits, int scale) {{
         java.math.BigDecimal unscaled = new java.math.BigDecimal(new java.math.BigInteger(digits));
         return unscaled.movePointLeft(scale);
@@ -508,17 +623,16 @@ public class Scaffold {{
     public static void main(String[] args) throws java.io.IOException {{
         java.util.List<String> lines = java.nio.file.Files.readAllLines(
             java.nio.file.Paths.get(INPUT_FILE), java.nio.charset.StandardCharsets.US_ASCII);
-
+{extra_reads}{extra_length_checks}
         StringBuilder out = new StringBuilder();
         WorkingStorage ws = new WorkingStorage();
 
-        for (String rawLine : lines) {{
-            if (rawLine.isEmpty()) {{
+{loop_header}            if (rawLine.isEmpty()) {{
                 continue;
             }}
             String line = String.format("%-" + RECORD_WIDTH + "s", rawLine);
             AccountRecord ar = AccountRecord.decode(line);
-            {spec.paragraph_method}(ar, ws);
+{extra_decodes}{paragraph_call}
 {accumulator_line}
             ReportLine rl = new ReportLine({report_ctor});
             // GnuCOBOL LINE SEQUENTIAL strips trailing spaces on WRITE.
@@ -556,9 +670,12 @@ def generate(spec: ScaffoldSpec = INTEREST_SPEC) -> str:
         "\n",
         _account_record_class(spec),
         "\n",
-        _line_class("ReportLine", spec.report_layout),
-        "\n",
     ]
+    for cls_name, layout in zip(extra_record_class_names(spec), spec.extra_input_layouts):
+        parts.append(_extra_record_class(cls_name, layout))
+        parts.append("\n")
+    parts.append(_line_class("ReportLine", spec.report_layout))
+    parts.append("\n")
     # Phase X7: no existing fixture has an empty totals_layout, so this
     # unconditionally emits TotalsLine for every one of them, unchanged.
     # An empty totals_layout (ROOT.cob's totals-optional shape) has no

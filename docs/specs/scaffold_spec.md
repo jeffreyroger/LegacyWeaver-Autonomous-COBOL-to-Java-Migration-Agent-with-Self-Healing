@@ -17,8 +17,21 @@ reads a `ScaffoldSpec` and never COBOL text. What changed is where the field
 table comes from — `weaver/cobol/` parses the DATA DIVISION and produces it,
 so the spec is derived per program rather than hand-declared. The scope
 limit that survives is narrower and enforced by raising, not by convention:
-one input and one output file, DISPLAY usage only, no `OCCURS` / `RENAMES` /
+one output file, DISPLAY usage only, no `OCCURS` / `RENAMES` /
 `COPY REPLACING`, and exactly one synthesis unit per program.
+
+**Amended 2026-08-21 (Phase BB1).** "One input file" widened to "one or
+more input files, read in lockstep by position" — a program may `OPEN
+INPUT` more than one file as long as its driving paragraph `READ`s each
+exactly once per loop iteration (no keyed match/merge; see
+`weaver/agent/scaffold.py`'s `ScaffoldSpec.extra_input_files` comment for
+the exact subshape and why it stops short of a general COBOL MERGE). Every
+program with exactly one input file — every fixture before this phase —
+takes the identical code path it always has; this is additive, not a
+relaxation of the single-input-file contract for programs that still have
+one. Output-file count, `OCCURS`/`RENAMES`/`COPY REPLACING`, and the
+one-synthesis-unit-per-program limit are unchanged (see `tasks.md`'s
+Phase BB row for BB2/BB3/BB4, the not-yet-built further widenings).
 
 ## 1. Record type per 01-level group
 

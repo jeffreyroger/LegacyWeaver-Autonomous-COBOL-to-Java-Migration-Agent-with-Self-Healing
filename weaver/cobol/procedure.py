@@ -35,6 +35,11 @@ _OPEN_RE = re.compile(
     rf"\bOPEN\s+(?P<mode>INPUT|OUTPUT|I-O|EXTEND)\s+(?P<file>{_IDENT})",
     re.IGNORECASE,
 )
+# (?<!-) blocks the false match inside "END-READ": \b alone treats the
+# hyphen as a non-word character, so \bREAD would otherwise match "READ"
+# starting right after "END-", pairing it with whatever token follows
+# END-READ (e.g. a subsequent IF) as if it were a real READ statement.
+_READ_RE = re.compile(rf"(?<!-)\bREAD\s+(?P<file>{_IDENT})", re.IGNORECASE)
 
 FIGURATIVE_SPACE = ("SPACE", "SPACES")
 FIGURATIVE_ZERO = ("ZERO", "ZEROS", "ZEROES")
@@ -62,6 +67,16 @@ def open_modes(procedure_text: str) -> dict[str, str]:
         m.group("file").upper(): m.group("mode").upper()
         for m in _OPEN_RE.finditer(procedure_text)
     }
+
+
+def reads(procedure_text: str) -> list[str]:
+    """Phase BB1: file names named by a `READ <file>` statement, in source
+    order (duplicates kept -- a file read once per loop iteration appears
+    once per `READ` statement in the driving paragraph's source, not once
+    per file). Used to confirm every opened input file is actually read in
+    the driving paragraph, the same lockstep-loop shape `_main_class`
+    generates -- never to model per-iteration control flow itself."""
+    return [m.group("file").upper() for m in _READ_RE.finditer(procedure_text)]
 
 
 def moves(paragraph_text: str) -> list[Move]:

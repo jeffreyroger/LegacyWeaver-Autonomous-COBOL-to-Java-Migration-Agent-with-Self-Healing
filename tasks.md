@@ -65,6 +65,23 @@ be proven end-to-end yet, for a disclosed reason — not the same as untouched.
 
 ---
 
+## Phase BB — Frontend Generalization Beyond One-Input/One-Output (2026-08-21, proactive)
+
+User-directed proactive generalization of `weaver/cobol/frontend.py`'s
+originally narrow one-input/one-output scope. Broken into independently
+mergeable sub-phases (BB1 shipped; BB2/BB3/BB4 -- multiple output files,
+multiple unit paragraphs, no-output-file programs -- are planned, not yet
+built, same discipline as `SUBPROGRAM_VERIFICATION_PLAN.md`'s X1-X8).
+
+| # | Phase | Status |
+|---|---|---|
+| BB1 | Multiple input files, read in lockstep by position -- `weaver/cobol/frontend.py` (N-file parsing, per-file field resolution via `ar`/`ar2`/`ar3` accessors), `weaver/agent/scaffold.py` (`ScaffoldSpec.extra_input_files`/`extra_input_layouts`, N-file main loop, record-count guard), `weaver/execution.py` unaffected (still single-input-file oracle/candidate wiring -- BB1 is proven at the frontend+scaffold+javac layer, not yet wired into the file-based `Orchestrator`/`weaver verify` CLI path), `weaver/cobol/procedure.py` (new `reads()` scraper) + `fixtures/cobol_multiinput/multiinput.cob` (new, a master file joined against an adjustment file) | ✅ real: all 8 existing fixtures' byte-identical-output regression (`test_cobol_frontend.py`, `test_scaffold_redefines.py`) unchanged; `test_frontend_multi_input.py` proves real parsing, a real `javac`-compiled 2-input-file scaffold producing hand-verified-correct output, a real record-count-mismatch runtime guard, and a real `cobc`-oracle byte-for-byte comparison test (gated, ready whenever `cobc` is reachable). A real regex bug was found and fixed along the way: `\bREAD` false-matched inside `END-READ` (hyphen is a non-word character, so `\b` saw a boundary there) |
+| BB2 | Multiple output files (e.g. report + error file) | ❌ not built |
+| BB3 | Multiple unit paragraphs per record (reusing Phase AA1's hierarchical-segment machinery) | ❌ not built |
+| BB4 | No output file (read-only/validation programs) | ❌ not built |
+
+---
+
 ## Explicitly out of scope (roadmap — deferred with reasons, not built)
 
 - ✅ ~~Six witness-search algorithms~~ — built 2026-08-20, Phase X8. See `docs/specs/SUBPROGRAM_VERIFICATION_PLAN.md` X8 and `weaver/agent/witness_search.py`.

@@ -5,9 +5,12 @@
 `to_scaffold_spec()` converts that model into the `ScaffoldSpec` the
 existing K2 generator already consumes unchanged.
 
-Declared scope (Phase U). One input file and one output file; DISPLAY usage
-only; one 01-level under the input FD and exactly two under the output FD
-(detail line, then totals line); one driving paragraph followed by exactly
+Declared scope (Phase U, widened by Phase BB1). One or more input files
+(read in lockstep by position when more than one -- see
+`weaver/agent/scaffold.py`'s `ScaffoldSpec.extra_input_files` comment) and
+one output file; DISPLAY usage only; exactly one 01-level under every input
+FD and one-or-two under the output FD (detail line, then optionally a
+totals line -- see Phase X7); one driving paragraph followed by exactly
 one synthesis unit. Everything outside that raises — a frontend that guesses
 produces a plausible layout, and a plausible-but-wrong layout invalidates
 every byte comparison downstream.
@@ -60,6 +63,13 @@ class ProgramModel:
     input_file: str
     output_file: str
     input_layout: tuple[Field, ...]
+    # Phase BB1: additional input files beyond the primary one, read in
+    # lockstep by position -- see ScaffoldSpec.extra_input_files' comment
+    # for the exact (deliberately narrow) subshape this covers. Empty for
+    # every program with exactly one input file, i.e. every fixture before
+    # this phase, so input_file/input_layout above are unchanged for them.
+    extra_input_files: tuple[str, ...]
+    extra_input_layouts: tuple[tuple[Field, ...], ...]
     report_layout: tuple[Field, ...]
     totals_layout: tuple[Field, ...]
     condition_names: tuple[ConditionName, ...]
@@ -153,9 +163,18 @@ def _records_for(part: _Partition, fd_name: str) -> list[DataItem]:
 
 
 def _java_source_expr(
-    token: str, target: Field, input_fields: dict[str, Field], ws_names: set[str]
+    token: str, target: Field, input_fields: dict[str, tuple[str, Field]], ws_names: set[str]
 ) -> str:
-    """The Java expression a `MOVE <token> TO <target>` implies."""
+    """The Java expression a `MOVE <token> TO <target>` implies.
+
+    Phase BB1: `input_fields` maps a field name to (accessor, Field) --
+    accessor is "ar" for the primary input file's fields, "ar2"/"ar3"/...
+    for an extra input file's fields (`extra_record_param_names` in
+    scaffold.py), so a field from any input file resolves to the right
+    Java object. Every caller before this phase built this dict with
+    every value's accessor fixed at "ar" (one input file), so this is a
+    pure widening, not a behavior change for them.
+    """
     if procedure.is_literal(token):
         return f'Scaffold.pad("{procedure.literal_text(token)}", {target.width})'
 
@@ -166,11 +185,11 @@ def _java_source_expr(
         return f"java.math.BigDecimal.ZERO.setScale({target.decimal_scale})"
 
     if name in input_fields:
-        source_field = input_fields[name]
+        accessor, source_field = input_fields[name]
         jname = java_field_name(name)
         # A REDEFINES overlay is an accessor over the target's bytes, not a
         # stored component -- scaffold.py emits it as a method.
-        return f"ar.{jname}()" if source_field.redefines is not None else f"ar.{jname}"
+        return f"{accessor}.{jname}()" if source_field.redefines is not None else f"{accessor}.{jname}"
     if name in ws_names:
         return f"ws.{java_field_name(name)}"
 
@@ -183,7 +202,7 @@ def _java_source_expr(
 def _ctor_map(
     paragraph_text: str,
     layout: tuple[Field, ...],
-    input_fields: dict[str, Field],
+    input_fields: dict[str, tuple[str, Field]],
     ws_names: set[str],
 ) -> dict[str, str]:
     by_name = {f.name: f for f in layout if f.redefines is None}
@@ -270,21 +289,45 @@ def load_program(cobol_source: Path, copybook_dir: Path | None = None) -> Progra
         )
     unit = units[0]
 
-    modes = procedure.open_modes("\n".join(p.source for p in paragraphs))
+    all_paragraph_source = "\n".join(p.source for p in paragraphs)
+    modes = procedure.open_modes(all_paragraph_source)
     input_files = [f for f, mode in modes.items() if mode == "INPUT"]
     output_files = [f for f, mode in modes.items() if mode == "OUTPUT"]
-    if len(input_files) != 1 or len(output_files) != 1:
+    if len(input_files) < 1 or len(output_files) != 1:
         raise UnsupportedProgramError(
-            f"{cobol_source}: Phase U models exactly one input and one output file "
-            f"(found inputs={input_files}, outputs={output_files})"
+            f"{cobol_source}: expected at least one input file and exactly one "
+            f"output file (found inputs={input_files}, outputs={output_files})"
         )
 
+    # Phase BB1: input_files[0] (OPEN order) is the primary file (ar);
+    # any further input files are read in lockstep by position (ar2, ar3,
+    # ...). Every existing fixture has exactly one input file, so
+    # extra_input_files below is always empty for them.
+    for f in input_files:
+        records = _records_for(part, f)
+        if len(records) != 1:
+            raise UnsupportedProgramError(
+                f"input FD {f} must declare exactly one 01-level, found {len(records)}"
+            )
+    if len(input_files) > 1:
+        # The driving paragraph must READ every opened input file exactly
+        # once per iteration -- the same lockstep shape scaffold.py's
+        # indexed loop generates. Anything else (a keyed lookup, a MERGE,
+        # an unread file) is outside this phase's declared subshape.
+        read_files = procedure.reads(driver.source)
+        read_counts = {f: read_files.count(f) for f in input_files}
+        if any(count != 1 for count in read_counts.values()) or set(read_files) != set(input_files):
+            raise UnsupportedProgramError(
+                f"{cobol_source}: with {len(input_files)} input files, the driving "
+                f"paragraph {driver.identifier!r} must READ each exactly once per "
+                f"iteration (lockstep-by-position only, no keyed match/merge); "
+                f"found reads={read_files}"
+            )
+
     input_records = _records_for(part, input_files[0])
-    if len(input_records) != 1:
-        raise UnsupportedProgramError(
-            f"input FD {input_files[0]} must declare exactly one 01-level, "
-            f"found {len(input_records)}"
-        )
+    extra_input_files = tuple(part.assignments[f] for f in input_files[1:])
+    extra_input_layouts = tuple(flatten(_records_for(part, f)[0]) for f in input_files[1:])
+
     output_records = _records_for(part, output_files[0])
     # Phase X7 (docs/specs/SUBPROGRAM_VERIFICATION_PLAN.md): a totals line
     # is now optional -- one 01-level (detail line only) is accepted in
@@ -314,7 +357,17 @@ def load_program(cobol_source: Path, copybook_dir: Path | None = None) -> Progra
         if item.picture is not None and item.picture.numeric
     )
 
-    input_fields = {f.name: f for f in input_layout}
+    # Phase BB1: field name -> (accessor, Field), merging the primary
+    # file's fields ("ar") with every extra file's fields ("ar2", "ar3",
+    # ...). A field name shared by two input files (unusual, and out of
+    # this phase's scope to resolve) resolves to whichever file's entry
+    # is inserted last -- raising instead would need its own real fixture
+    # to prove out, so this is disclosed as a known limitation rather than
+    # guessed at silently in the other direction.
+    input_fields: dict[str, tuple[str, Field]] = {f.name: ("ar", f) for f in input_layout}
+    for i, extra_layout in enumerate(extra_input_layouts):
+        accessor = f"ar{i + 2}"
+        input_fields.update({f.name: (accessor, f) for f in extra_layout})
     ws_name_set = set(ws_names)
 
     report_ctor_map = _ctor_map(unit.source, report_layout, input_fields, ws_name_set)
@@ -333,6 +386,8 @@ def load_program(cobol_source: Path, copybook_dir: Path | None = None) -> Progra
         input_file=part.assignments[input_files[0]],
         output_file=part.assignments[output_files[0]],
         input_layout=input_layout,
+        extra_input_files=extra_input_files,
+        extra_input_layouts=extra_input_layouts,
         report_layout=report_layout,
         totals_layout=totals_layout,
         condition_names=condition_names(input_root),
@@ -368,6 +423,8 @@ def to_scaffold_spec(model: ProgramModel) -> ScaffoldSpec:
         input_file=model.input_file,
         output_file=model.output_file,
         input_layout=model.input_layout,
+        extra_input_files=model.extra_input_files,
+        extra_input_layouts=model.extra_input_layouts,
         report_layout=model.report_layout,
         totals_layout=model.totals_layout,
         condition_names=model.condition_names,
