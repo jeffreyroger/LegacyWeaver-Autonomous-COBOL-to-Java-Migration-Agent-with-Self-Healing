@@ -20,7 +20,7 @@ be proven end-to-end yet, for a disclosed reason — not the same as untouched.
 | 5 | REDEFINES-as-subclass byte-buffer accessors (`scaffold.py`) | ✅ |
 | 6 | Multi-program `CALL` fixture (`fixtures/cobol/multiprog/`) | ✅ |
 | 7 | `weaver/cobol/program_dag.py` — cross-program leaf-first DAG | ✅ |
-| 8 | `weaver/agent/leaf_orchestrator.py` — DAG sequencing + stub-cache threading | ✅ (tested against a fake orchestrator only; real dispatch was Phase X6's job) |
+| 8 | `weaver/agent/leaf_orchestrator.py` — DAG sequencing + stub-cache threading | ✅ (real dispatch proven in Phase X6) |
 
 ---
 
@@ -31,9 +31,9 @@ be proven end-to-end yet, for a disclosed reason — not the same as untouched.
 | X1 | `weaver/cobol/subprogram.py` — `LINKAGE SECTION` subprogram parser | ✅ |
 | X2 | `weaver/agent/subprogram_scaffold.py` — subprogram scaffold generator | ✅ |
 | X3 | `weaver/agent/subprogram_verify.py` — real parity verification axis (blocking gate) | ✅ |
-| X4 | `weaver/agent/subprogram_orchestrator.py` — synthesis + repair wiring | ⚠️ code complete, unit-verified to the Ollama HTTP boundary; real-unassisted-synthesis commit **not yet proven** — blocked by a broken Ollama daemon in this dev environment (being fixed now, WSL Ollama) |
+| X4 | `weaver/agent/subprogram_orchestrator.py` — synthesis + repair wiring | ✅ real, unassisted local Ollama synthesis commits `LEAF-A` and `LEAF-B` with 0 divergences (proven 2026-08-20 via Ollama running in WSL) |
 | X5 | Real `UnitCache` harvest for a subprogram leaf | ✅ |
-| X6 | `LeafOrchestrator` real dispatch (`_program_kind`, no fake factory) | ⚠️ code complete, dispatch logic proven, Task 8 tests preserved unmodified; full real end-to-end run (`LEAF-A`/`LEAF-B` committing for real before `ROOT`) **not yet proven** — same Ollama blocker as X4 |
+| X6 | `LeafOrchestrator` real dispatch (`_program_kind`, no fake factory) | ✅ real end-to-end run proven: `LEAF-A`/`LEAF-B` commit for real via Ollama before `ROOT`, real `UnitCache` dir created, Task 8's fake-orchestrator tests still pass unmodified |
 | X7 | `ROOT.cob` totals-optional frontend relaxation + resolved `CALL` translation (stretch) | ❌ not started |
 
 ---
@@ -49,10 +49,19 @@ be proven end-to-end yet, for a disclosed reason — not the same as untouched.
 
 ---
 
-## Outstanding blocker (as of 2026-08-20)
+## Resolved blocker (2026-08-20)
 
-X4 and X6's remaining exit criteria both need a working local Ollama daemon.
-The native Windows install was returning `400 "does not support generate"`
-for every model on both `/api/generate` and `/api/chat`; a process restart
-did not fix it. Currently switching to Ollama running inside WSL instead
-(models being pulled) as the fix.
+The native Windows Ollama install was returning `400 "does not support
+generate"` for every model on both `/api/generate` and `/api/chat`; a
+process restart did not fix it. Fixed by running Ollama inside WSL instead
+(`ollama serve` in WSL, `qwen2.5-coder:7b`/`nomic-embed-text` pulled there)
+— WSL2's localhost forwarding exposes it to the Windows-side Python process
+at `127.0.0.1:11434` unchanged, satisfying `inference.py`'s loopback-only
+guarantee. A `wsl --shutdown` + restart was needed once to unstick flaky
+port forwarding. X4 and X6's real-synthesis exit criteria both pass now.
+
+## Only outstanding item
+
+X7 (stretch) — `ROOT.cob`'s totals-optional frontend relaxation and
+resolved `CALL` translation. Not started; not required for X1–X6 to stand
+on their own.
