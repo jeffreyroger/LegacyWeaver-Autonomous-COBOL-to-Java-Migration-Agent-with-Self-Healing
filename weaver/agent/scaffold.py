@@ -115,6 +115,15 @@ class ScaffoldSpec:
     # same disclosed limitation Phase BB1 left for extra input files.
     extra_paragraph_ids: tuple[str, ...] = ()
     extra_paragraph_methods: tuple[str, ...] = ()
+    # Phase BB4: a no-output-file (validation-only) program has empty
+    # report_layout/output_file and instead ends with one DISPLAY of its
+    # single accumulator, encoded with CobolEdit.zeroPadded at this PIC
+    # width/scale (there is no output-record layout to derive the
+    # encoding from). Zero (the default) means "not a no-output-file
+    # program" -- every ScaffoldSpec declared before this phase has a
+    # real output file and takes the exact code path it always has.
+    summary_accumulator_width: int = 0
+    summary_accumulator_scale: int = 0
 
 
 # Declared from the 88-levels in fixtures/cobol/copybooks/ACCOUNT-REC.cpy.
@@ -717,11 +726,46 @@ def _main_class(spec: ScaffoldSpec) -> str:
     extra_output_totals_text = "".join(extra_output_totals_blocks)
     extra_output_file_writes_text = "".join(extra_output_file_writes)
 
+    # Phase BB4: a no-output-file (validation-only) program never opens an
+    # OUTPUT_FILE, never builds a per-record ReportLine, and ends with one
+    # DISPLAY of its accumulator instead of a totals-line write. Every
+    # spec before this phase has summary_accumulator_width == 0 and
+    # renders exactly what it always has -- the const declaration, the
+    # per-record write block, and the finishing block are each selected
+    # from one of two full variants (not conditionally trimmed piece by
+    # piece), same discipline as BB1's loop_header split.
+    is_summary_only = spec.summary_accumulator_width > 0
+    if is_summary_only:
+        output_file_const = ""
+        out_builder_line = ""
+        record_write_block = (
+            f"            ws.{spec.accumulator_field} = "
+            f"ws.{spec.accumulator_field}.add(ws.{spec.per_record_field});\n"
+        )
+        finish_block = (
+            f"        System.out.println(CobolEdit.zeroPadded(ws.{spec.accumulator_field}"
+            f".movePointRight({spec.summary_accumulator_scale}), {spec.summary_accumulator_width}));\n"
+        )
+    else:
+        output_file_const = f'    private static final String OUTPUT_FILE = "{spec.output_file}";\n'
+        out_builder_line = "        StringBuilder out = new StringBuilder();\n"
+        record_write_block = (
+            f"{accumulator_line}\n"
+            f"            ReportLine rl = new ReportLine({report_ctor});\n"
+            f'            // GnuCOBOL LINE SEQUENTIAL strips trailing spaces on WRITE.\n'
+            f'            out.append(rstripSpaces(rl.encode())).append("\\n");\n'
+        )
+        finish_block = (
+            f"{totals_write_block}{extra_output_totals_text}\n"
+            f"        java.nio.file.Files.write(java.nio.file.Paths.get(OUTPUT_FILE),\n"
+            f"            out.toString().getBytes(java.nio.charset.StandardCharsets.US_ASCII));\n"
+            f"{extra_output_file_writes_text}"
+        )
+
     return f"""\
 public class Scaffold {{
     private static final String INPUT_FILE = "{spec.input_file}";
-    private static final String OUTPUT_FILE = "{spec.output_file}";
-    private static final int RECORD_WIDTH = {input_width};
+{output_file_const}    private static final int RECORD_WIDTH = {input_width};
 {extra_consts}{extra_output_consts}
     static java.math.BigDecimal decodeUnsigned(String digits, int scale) {{
         java.math.BigDecimal unscaled = new java.math.BigDecimal(new java.math.BigInteger(digits));
@@ -750,8 +794,7 @@ public class Scaffold {{
         java.util.List<String> lines = java.nio.file.Files.readAllLines(
             java.nio.file.Paths.get(INPUT_FILE), java.nio.charset.StandardCharsets.US_ASCII);
 {extra_reads}{extra_length_checks}
-        StringBuilder out = new StringBuilder();
-{extra_output_builders}        WorkingStorage ws = new WorkingStorage();
+{out_builder_line}{extra_output_builders}        WorkingStorage ws = new WorkingStorage();
 
 {loop_header}            if (rawLine.isEmpty()) {{
                 continue;
@@ -759,15 +802,8 @@ public class Scaffold {{
             String line = String.format("%-" + RECORD_WIDTH + "s", rawLine);
             AccountRecord ar = AccountRecord.decode(line);
 {extra_decodes}{paragraph_call}
-{accumulator_line}
-            ReportLine rl = new ReportLine({report_ctor});
-            // GnuCOBOL LINE SEQUENTIAL strips trailing spaces on WRITE.
-            out.append(rstripSpaces(rl.encode())).append("\\n");
-{extra_output_writes_text}        }}
-{totals_write_block}{extra_output_totals_text}
-        java.nio.file.Files.write(java.nio.file.Paths.get(OUTPUT_FILE),
-            out.toString().getBytes(java.nio.charset.StandardCharsets.US_ASCII));
-{extra_output_file_writes_text}    }}
+{record_write_block}{extra_output_writes_text}        }}
+{finish_block}    }}
 
 {_paragraph_stub(spec)}}}
 """
@@ -800,8 +836,15 @@ def generate(spec: ScaffoldSpec = INTEREST_SPEC) -> str:
     for cls_name, layout in zip(extra_record_class_names(spec), spec.extra_input_layouts):
         parts.append(_extra_record_class(cls_name, layout))
         parts.append("\n")
-    parts.append(_line_class("ReportLine", spec.report_layout))
-    parts.append("\n")
+    # Phase BB4: no existing fixture (before this phase) has an empty
+    # report_layout, so this unconditionally emitted ReportLine for every
+    # one of them, unchanged. A no-output-file spec's empty report_layout
+    # has no fields to encode -- _main_class's is_summary_only branch
+    # never references ReportLine in that case, so the class itself is
+    # skipped rather than emitting a broken zero-field encode().
+    if spec.report_layout:
+        parts.append(_line_class("ReportLine", spec.report_layout))
+        parts.append("\n")
     # Phase X7: no existing fixture has an empty totals_layout, so this
     # unconditionally emits TotalsLine for every one of them, unchanged.
     # An empty totals_layout (ROOT.cob's totals-optional shape) has no

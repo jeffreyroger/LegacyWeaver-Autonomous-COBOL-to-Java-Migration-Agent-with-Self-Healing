@@ -5,13 +5,16 @@
 `to_scaffold_spec()` converts that model into the `ScaffoldSpec` the
 existing K2 generator already consumes unchanged.
 
-Declared scope (Phase U, widened by Phases BB1/BB2/BB3). One or more input
-files (read in lockstep by position when more than one -- see
+Declared scope (Phase U, widened by Phases BB1/BB2/BB3/BB4). One or more
+input files (read in lockstep by position when more than one -- see
 `weaver/agent/scaffold.py`'s `ScaffoldSpec.extra_input_files` comment) and
-one or more output files (every record written unconditionally to every
+zero or more output files (every record written unconditionally to every
 output file -- see `ScaffoldSpec.extra_output_files`/`ExtraOutputFile`;
-conditional routing is out of scope); DISPLAY usage only; exactly one
-01-level under every input FD and one-or-two under every output FD
+conditional routing is out of scope. Zero output files means a
+validation-only program: its driving paragraph must have exactly one
+single-argument `DISPLAY <unsigned ws item>` summary statement instead --
+see `_summary_accumulator`); DISPLAY usage otherwise unmodeled; exactly
+one 01-level under every input FD and one-or-two under every output FD
 (detail line, then optionally a totals line -- see Phase X7); one driving
 paragraph followed by one or more unit paragraphs, each `PERFORM`ed by the
 driver exactly once and called in sequence every record (see
@@ -99,6 +102,12 @@ class ProgramModel:
     # this phase.
     extra_paragraph_ids: tuple[str, ...]
     extra_paragraph_methods: tuple[str, ...]
+    # Phase BB4: nonzero only for a no-output-file program -- the
+    # accumulator's own PIC width/scale, needed to encode its final
+    # DISPLAY summary line (CobolEdit.zeroPadded) since there is no
+    # output-record layout to derive that encoding from.
+    summary_accumulator_width: int
+    summary_accumulator_scale: int
 
 
 # --------------------------------------------------------------------------
@@ -278,6 +287,58 @@ def _accumulator(
     return accumulator, sources[0]
 
 
+def _summary_accumulator(
+    driver_source: str, units_source: str, ws_names: set[str], ws_items: tuple[DataItem, ...]
+) -> tuple[str, str, Field]:
+    """Phase BB4's `_accumulator` equivalent for a no-output-file program:
+    the accumulator is identified by the driving paragraph's single
+    `DISPLAY <ws-item>` summary statement instead of a totals-line MOVE
+    target (there is no output record to MOVE into). Returns
+    (accumulator_field, per_record_field, the accumulator's own Field --
+    needed by scaffold.py to encode it for the final DISPLAY, since there
+    is no output-record layout to derive that from either).
+    """
+    displayed = procedure.displays(driver_source)
+    ws_displayed = [d for d in displayed if d in ws_names]
+    if len(ws_displayed) != 1:
+        raise UnsupportedProgramError(
+            f"a no-output-file program's driving paragraph must have exactly one "
+            f"single-argument DISPLAY <working-storage item> summary statement, "
+            f"found {ws_displayed}"
+        )
+    accumulator_name = ws_displayed[0]
+    accumulator = java_field_name(accumulator_name)
+
+    sources = [
+        java_field_name(a.source)
+        for a in procedure.adds(units_source)
+        if a.source in ws_names and java_field_name(a.target) == accumulator
+    ]
+    if len(sources) != 1:
+        raise UnsupportedProgramError(
+            f"expected exactly one `ADD <ws item> TO {accumulator_name}` in the unit "
+            f"paragraph(s), found {len(sources)}"
+        )
+
+    item = next((i for i in ws_items if i.name == accumulator_name), None)
+    if item is None or item.picture is None or not item.picture.numeric:
+        raise UnsupportedProgramError(f"{accumulator_name} is not a numeric working-storage item")
+    if item.picture.signed:
+        # Phase BB4's disclosed narrowing: the summary DISPLAY is encoded
+        # with the same unsigned zero-padded routine input records already
+        # use (CobolEdit.zeroPadded) -- a real signed-DISPLAY encoder is a
+        # different, untested shape, out of this phase's scope.
+        raise UnsupportedProgramError(
+            f"{accumulator_name}: a no-output-file program's summary accumulator "
+            "must be unsigned (signed DISPLAY encoding is outside Phase BB4's scope)"
+        )
+    accumulator_field_info = Field(
+        name=accumulator_name, offset=0, width=item.picture.width, numeric=True,
+        decimal_scale=item.picture.decimal_scale,
+    )
+    return accumulator, sources[0], accumulator_field_info
+
+
 # --------------------------------------------------------------------------
 # Entry point
 # --------------------------------------------------------------------------
@@ -327,11 +388,15 @@ def load_program(cobol_source: Path, copybook_dir: Path | None = None) -> Progra
     modes = procedure.open_modes(all_paragraph_source)
     input_files = [f for f, mode in modes.items() if mode == "INPUT"]
     output_files = [f for f, mode in modes.items() if mode == "OUTPUT"]
-    if len(input_files) < 1 or len(output_files) < 1:
+    if len(input_files) < 1:
         raise UnsupportedProgramError(
-            f"{cobol_source}: expected at least one input file and at least one "
-            f"output file (found inputs={input_files}, outputs={output_files})"
+            f"{cobol_source}: expected at least one input file (found none)"
         )
+    # Phase BB4: zero output files is allowed -- a validation-only program
+    # that never writes a detail-record file, only a final DISPLAY summary
+    # (see the summary-accumulator derivation below). One or more output
+    # files takes the exact code path every earlier phase already proved.
+    has_output_file = len(output_files) >= 1
 
     # Phase BB1: input_files[0] (OPEN order) is the primary file (ar);
     # any further input files are read in lockstep by position (ar2, ar3,
@@ -377,12 +442,16 @@ def load_program(cobol_source: Path, copybook_dir: Path | None = None) -> Progra
                 f"or two 01-levels (detail line then totals line), found {len(records)}"
             )
 
-    output_records = _records_for(part, output_files[0])
-    has_totals = len(output_records) == 2
+    if has_output_file:
+        output_records = _records_for(part, output_files[0])
+        has_totals = len(output_records) == 2
+    else:
+        output_records = []
+        has_totals = False
 
     input_root = input_records[0]
     input_layout = flatten(input_root)
-    report_layout = flatten(output_records[0])
+    report_layout = flatten(output_records[0]) if has_output_file else ()
     totals_layout = flatten(output_records[1]) if has_totals else ()
 
     ws_roots = parse_items(part.working_storage)
@@ -411,15 +480,29 @@ def load_program(cobol_source: Path, copybook_dir: Path | None = None) -> Progra
     # case (every fixture before this phase) this is exactly unit.source.
     units_combined_source = "\n".join(u.source for u in units)
 
-    report_ctor_map = _ctor_map(units_combined_source, report_layout, input_fields, ws_name_set)
-    if has_totals:
-        totals_ctor_map = _ctor_map(driver.source, totals_layout, input_fields, ws_name_set)
-        accumulator_field, per_record_field = _accumulator(
-            units_combined_source, ws_name_set, totals_ctor_map
-        )
+    summary_accumulator_width = 0
+    summary_accumulator_scale = 0
+    if has_output_file:
+        report_ctor_map = _ctor_map(units_combined_source, report_layout, input_fields, ws_name_set)
+        if has_totals:
+            totals_ctor_map = _ctor_map(driver.source, totals_layout, input_fields, ws_name_set)
+            accumulator_field, per_record_field = _accumulator(
+                units_combined_source, ws_name_set, totals_ctor_map
+            )
+        else:
+            totals_ctor_map = {}
+            accumulator_field, per_record_field = "", ""
     else:
+        # Phase BB4: no output file -- no report/totals ctor map at all;
+        # the accumulator is identified by the driver's single summary
+        # DISPLAY statement instead of a totals-line MOVE target.
+        report_ctor_map = {}
         totals_ctor_map = {}
-        accumulator_field, per_record_field = "", ""
+        accumulator_field, per_record_field, summary_field = _summary_accumulator(
+            driver.source, units_combined_source, ws_name_set, ws_items
+        )
+        summary_accumulator_width = summary_field.width
+        summary_accumulator_scale = summary_field.decimal_scale
 
     # Phase BB2: every output file beyond the primary one, each derived by
     # the exact same MOVE-based ctor-map/accumulator mechanism the primary
@@ -454,7 +537,7 @@ def load_program(cobol_source: Path, copybook_dir: Path | None = None) -> Progra
         program_id=part.program_id,
         source_path=cobol_source,
         input_file=part.assignments[input_files[0]],
-        output_file=part.assignments[output_files[0]],
+        output_file=part.assignments[output_files[0]] if has_output_file else "",
         input_layout=input_layout,
         extra_input_files=extra_input_files,
         extra_input_layouts=extra_input_layouts,
@@ -473,6 +556,8 @@ def load_program(cobol_source: Path, copybook_dir: Path | None = None) -> Progra
         extra_output_files=tuple(extra_output_files),
         extra_paragraph_ids=tuple(u.identifier for u in units[1:]),
         extra_paragraph_methods=tuple(java_method_name(u.identifier) for u in units[1:]),
+        summary_accumulator_width=summary_accumulator_width,
+        summary_accumulator_scale=summary_accumulator_scale,
     )
 
 
@@ -511,6 +596,8 @@ def to_scaffold_spec(model: ProgramModel) -> ScaffoldSpec:
         extra_output_files=model.extra_output_files,
         extra_paragraph_ids=model.extra_paragraph_ids,
         extra_paragraph_methods=model.extra_paragraph_methods,
+        summary_accumulator_width=model.summary_accumulator_width,
+        summary_accumulator_scale=model.summary_accumulator_scale,
     )
 
 

@@ -40,6 +40,20 @@ _OPEN_RE = re.compile(
 # starting right after "END-", pairing it with whatever token follows
 # END-READ (e.g. a subsequent IF) as if it were a real READ statement.
 _READ_RE = re.compile(rf"(?<!-)\bREAD\s+(?P<file>{_IDENT})", re.IGNORECASE)
+# Phase BB4: single-argument DISPLAY <identifier> only -- a DISPLAY
+# statement with a string literal, multiple arguments, or WITH NO
+# ADVANCING is outside this scraper's declared scope (it exists only to
+# identify which working-storage item a no-output-file program's summary
+# line reports, not to model DISPLAY's full argument grammar).
+# (?![A-Z0-9-]) blocks a false shorter match: a hyphen inside an
+# identifier (e.g. WS-TOTAL) is a non-word character, so a plain \b would
+# let the engine backtrack mid-identifier once the second lookahead below
+# rejects the full match -- this one requires the captured arg to already
+# be the WHOLE identifier, not a prefix of it, before the "no second
+# argument follows" check ever runs.
+_DISPLAY_RE = re.compile(
+    rf"\bDISPLAY\s+(?P<arg>{_IDENT})(?![A-Z0-9-])(?!\s+{_IDENT})", re.IGNORECASE
+)
 
 FIGURATIVE_SPACE = ("SPACE", "SPACES")
 FIGURATIVE_ZERO = ("ZERO", "ZEROS", "ZEROES")
@@ -77,6 +91,16 @@ def reads(procedure_text: str) -> list[str]:
     the driving paragraph, the same lockstep-loop shape `_main_class`
     generates -- never to model per-iteration control flow itself."""
     return [m.group("file").upper() for m in _READ_RE.finditer(procedure_text)]
+
+
+def displays(paragraph_text: str) -> list[str]:
+    """Phase BB4: the single identifier argument of every single-argument
+    `DISPLAY <identifier>` statement in `paragraph_text`, in source order.
+    Used to identify which working-storage item a no-output-file
+    program's driving paragraph reports as its final summary -- see
+    `_DISPLAY_RE`'s own comment for the exact (deliberately narrow)
+    subshape."""
+    return [m.group("arg").upper() for m in _DISPLAY_RE.finditer(paragraph_text)]
 
 
 def moves(paragraph_text: str) -> list[Move]:

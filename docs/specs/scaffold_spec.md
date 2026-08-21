@@ -57,6 +57,22 @@ only; the live synthesis/repair-loop `Orchestrator` still assumes one
 unit per program, so wiring N units through `weaver migrate`'s actual
 repair loop is further work (see `tasks.md`'s Phase BB row for BB3).
 
+**Amended 2026-08-21 (Phase BB4).** "One output file" further widened to
+"zero or more" -- a program with no `OUTPUT`-mode file at all (a
+validation-only program) is accepted provided its driving paragraph has
+exactly one single-argument `DISPLAY <working-storage item>` summary
+statement; that item becomes the accumulator (identified from the
+`DISPLAY`, since there is no totals-line MOVE target to identify it from
+otherwise) and must be unsigned (a real signed-`DISPLAY` encoder is a
+different, untested shape, left out of scope on purpose). The generated
+`main()` skips `OUTPUT_FILE`/`ReportLine` entirely and ends with one
+`System.out.println(CobolEdit.zeroPadded(...))` of the accumulator instead
+of a file write. Every program with a real output file -- every fixture
+before this phase -- takes the identical code path it always has.
+Disclosed narrowing (deliberately the smallest slice of "no output file"
+programs, not the full space): one fixed final summary line only, never
+a per-record `DISPLAY`.
+
 ## 1. Record type per 01-level group
 
 - `AccountRecord` — one component per `INPUT_LAYOUT` field that is not a
