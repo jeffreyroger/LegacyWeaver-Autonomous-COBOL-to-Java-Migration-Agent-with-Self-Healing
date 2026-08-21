@@ -35,6 +35,28 @@ class WorkingStorageField:
 
 
 @dataclass(frozen=True)
+class ExtraOutputFile:
+    """Phase BB2: a second (or third, ...) output file beyond the primary
+    one -- e.g. a report file plus a separate error/exceptions file. Every
+    input record unconditionally writes one line to this file too (a
+    disclosed narrower subshape than conditional routing: which record
+    goes where would be real business-logic derivation, which
+    weaver/cobol/procedure.py's own docstring already disclaims doing --
+    see its module docstring). Reuses the exact same report/totals-layout
+    and ctor-map/accumulator shape the primary output file already has,
+    just parameterized per extra file instead of hand-declared once.
+    """
+
+    file_name: str
+    report_layout: tuple[Field, ...]
+    totals_layout: tuple[Field, ...]
+    report_ctor_map: dict[str, str]
+    totals_ctor_map: dict[str, str]
+    accumulator_field: str
+    per_record_field: str
+
+
+@dataclass(frozen=True)
 class ScaffoldSpec:
     input_file: str
     output_file: str
@@ -72,6 +94,12 @@ class ScaffoldSpec:
     # `extra_input_files[i]` pairs with `extra_input_layouts[i]`.
     extra_input_files: tuple[str, ...] = ()
     extra_input_layouts: tuple[tuple[Field, ...], ...] = ()
+    # Phase BB2: additional output files beyond the primary one -- see
+    # ExtraOutputFile's own comment for the exact (deliberately narrow)
+    # subshape. Empty by default -- every ScaffoldSpec declared before
+    # this phase has exactly one output file and takes the exact code
+    # path it always has.
+    extra_output_files: tuple[ExtraOutputFile, ...] = ()
 
 
 # Declared from the 88-levels in fixtures/cobol/copybooks/ACCOUNT-REC.cpy.
@@ -131,6 +159,16 @@ def extra_record_class_names(spec: ScaffoldSpec) -> tuple[str, ...]:
 
 def extra_record_param_names(spec: ScaffoldSpec) -> tuple[str, ...]:
     return tuple(f"ar{i + 2}" for i in range(len(spec.extra_input_files)))
+
+
+def extra_output_report_class_name(index: int) -> str:
+    """Phase BB2: deterministic class name for extra_output_files[index]'s
+    detail-line class -- "ReportLine2", "ReportLine3", ..."""
+    return f"ReportLine{index + 2}"
+
+
+def extra_output_totals_class_name(index: int) -> str:
+    return f"TotalsLine{index + 2}"
 
 
 def java_signature(spec: ScaffoldSpec) -> str:
@@ -591,12 +629,64 @@ def _main_class(spec: ScaffoldSpec) -> str:
         loop_header = "        for (String rawLine : lines) {\n"
     paragraph_call = f"            {spec.paragraph_method}(ar{extra_call_args}, ws);"
 
+    # Phase BB2: N >= 0 extra output files, each written unconditionally
+    # once per record (see ExtraOutputFile's own comment for why this
+    # stops short of conditional routing). Every string below is empty
+    # when extra_output_files is empty, so a single-output-file spec
+    # renders exactly what it always has.
+    extra_output_consts = "".join(
+        f'    private static final String OUTPUT_FILE{i + 2} = "{extra.file_name}";\n'
+        for i, extra in enumerate(spec.extra_output_files)
+    )
+    extra_output_builders = "".join(
+        f"        StringBuilder out{i + 2} = new StringBuilder();\n"
+        for i in range(len(spec.extra_output_files))
+    )
+    extra_output_writes = []
+    extra_output_totals_blocks = []
+    extra_output_file_writes = []
+    for i, extra in enumerate(spec.extra_output_files):
+        idx = i + 2
+        cls = extra_output_report_class_name(i)
+        fields = _base_fields(extra.report_layout)
+        ctor_args = []
+        for f in fields:
+            if f.name not in extra.report_ctor_map:
+                raise NotImplementedError(f"no main-loop mapping declared for {f.name} (extra output file {idx})")
+            ctor_args.append(extra.report_ctor_map[f.name])
+        extra_output_writes.append(
+            f"            {cls} rl{idx} = new {cls}({', '.join(ctor_args)});\n"
+            f'            out{idx}.append(rstripSpaces(rl{idx}.encode())).append("\\n");\n'
+        )
+        if extra.totals_layout:
+            totals_cls = extra_output_totals_class_name(i)
+            totals_fields = _base_fields(extra.totals_layout)
+            totals_args = []
+            for f in totals_fields:
+                if f.name not in extra.totals_ctor_map:
+                    raise NotImplementedError(f"no main-loop mapping declared for {f.name} (extra output file {idx})")
+                totals_args.append(extra.totals_ctor_map[f.name])
+            extra_output_writes.append(
+                f"            ws.{extra.accumulator_field} = ws.{extra.accumulator_field}.add(ws.{extra.per_record_field});\n"
+            )
+            extra_output_totals_blocks.append(
+                f"        {totals_cls} tl{idx} = new {totals_cls}({', '.join(totals_args)});\n"
+                f'        out{idx}.append(rstripSpaces(tl{idx}.encode())).append("\\n");\n'
+            )
+        extra_output_file_writes.append(
+            f"        java.nio.file.Files.write(java.nio.file.Paths.get(OUTPUT_FILE{idx}),\n"
+            f"            out{idx}.toString().getBytes(java.nio.charset.StandardCharsets.US_ASCII));\n"
+        )
+    extra_output_writes_text = "".join(extra_output_writes)
+    extra_output_totals_text = "".join(extra_output_totals_blocks)
+    extra_output_file_writes_text = "".join(extra_output_file_writes)
+
     return f"""\
 public class Scaffold {{
     private static final String INPUT_FILE = "{spec.input_file}";
     private static final String OUTPUT_FILE = "{spec.output_file}";
     private static final int RECORD_WIDTH = {input_width};
-{extra_consts}
+{extra_consts}{extra_output_consts}
     static java.math.BigDecimal decodeUnsigned(String digits, int scale) {{
         java.math.BigDecimal unscaled = new java.math.BigDecimal(new java.math.BigInteger(digits));
         return unscaled.movePointLeft(scale);
@@ -625,7 +715,7 @@ public class Scaffold {{
             java.nio.file.Paths.get(INPUT_FILE), java.nio.charset.StandardCharsets.US_ASCII);
 {extra_reads}{extra_length_checks}
         StringBuilder out = new StringBuilder();
-        WorkingStorage ws = new WorkingStorage();
+{extra_output_builders}        WorkingStorage ws = new WorkingStorage();
 
 {loop_header}            if (rawLine.isEmpty()) {{
                 continue;
@@ -637,11 +727,11 @@ public class Scaffold {{
             ReportLine rl = new ReportLine({report_ctor});
             // GnuCOBOL LINE SEQUENTIAL strips trailing spaces on WRITE.
             out.append(rstripSpaces(rl.encode())).append("\\n");
-        }}
-{totals_write_block}
+{extra_output_writes_text}        }}
+{totals_write_block}{extra_output_totals_text}
         java.nio.file.Files.write(java.nio.file.Paths.get(OUTPUT_FILE),
             out.toString().getBytes(java.nio.charset.StandardCharsets.US_ASCII));
-    }}
+{extra_output_file_writes_text}    }}
 
 {_paragraph_stub(spec)}}}
 """
@@ -685,6 +775,12 @@ def generate(spec: ScaffoldSpec = INTEREST_SPEC) -> str:
     if spec.totals_layout:
         parts.append(_line_class("TotalsLine", spec.totals_layout))
         parts.append("\n")
+    for i, extra in enumerate(spec.extra_output_files):
+        parts.append(_line_class(extra_output_report_class_name(i), extra.report_layout))
+        parts.append("\n")
+        if extra.totals_layout:
+            parts.append(_line_class(extra_output_totals_class_name(i), extra.totals_layout))
+            parts.append("\n")
     parts.append(_working_storage_class(spec))
     parts.append("\n")
     parts.append(_main_class(spec))

@@ -5,15 +5,17 @@
 `to_scaffold_spec()` converts that model into the `ScaffoldSpec` the
 existing K2 generator already consumes unchanged.
 
-Declared scope (Phase U, widened by Phase BB1). One or more input files
-(read in lockstep by position when more than one -- see
+Declared scope (Phase U, widened by Phases BB1/BB2). One or more input
+files (read in lockstep by position when more than one -- see
 `weaver/agent/scaffold.py`'s `ScaffoldSpec.extra_input_files` comment) and
-one output file; DISPLAY usage only; exactly one 01-level under every input
-FD and one-or-two under the output FD (detail line, then optionally a
-totals line -- see Phase X7); one driving paragraph followed by exactly
-one synthesis unit. Everything outside that raises — a frontend that guesses
-produces a plausible layout, and a plausible-but-wrong layout invalidates
-every byte comparison downstream.
+one or more output files (every record written unconditionally to every
+output file -- see `ScaffoldSpec.extra_output_files`/`ExtraOutputFile`;
+conditional routing is out of scope); DISPLAY usage only; exactly one
+01-level under every input FD and one-or-two under every output FD
+(detail line, then optionally a totals line -- see Phase X7); one driving
+paragraph followed by exactly one synthesis unit. Everything outside that
+raises — a frontend that guesses produces a plausible layout, and a
+plausible-but-wrong layout invalidates every byte comparison downstream.
 """
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
-from weaver.agent.scaffold import ConditionName, ScaffoldSpec, WorkingStorageField
+from weaver.agent.scaffold import ConditionName, ExtraOutputFile, ScaffoldSpec, WorkingStorageField
 from weaver.agent.segment import segment
 from weaver.cobol import procedure
 from weaver.cobol.data_division import (
@@ -82,6 +84,12 @@ class ProgramModel:
     totals_ctor_map: dict[str, str]
     accumulator_field: str
     per_record_field: str
+    # Phase BB2: additional output files beyond the primary one, each
+    # written unconditionally once per record -- see ExtraOutputFile's own
+    # comment for the exact (deliberately narrow) subshape. Empty for
+    # every program with exactly one output file, i.e. every fixture
+    # before this phase.
+    extra_output_files: tuple[ExtraOutputFile, ...]
 
 
 # --------------------------------------------------------------------------
@@ -293,9 +301,9 @@ def load_program(cobol_source: Path, copybook_dir: Path | None = None) -> Progra
     modes = procedure.open_modes(all_paragraph_source)
     input_files = [f for f, mode in modes.items() if mode == "INPUT"]
     output_files = [f for f, mode in modes.items() if mode == "OUTPUT"]
-    if len(input_files) < 1 or len(output_files) != 1:
+    if len(input_files) < 1 or len(output_files) < 1:
         raise UnsupportedProgramError(
-            f"{cobol_source}: expected at least one input file and exactly one "
+            f"{cobol_source}: expected at least one input file and at least one "
             f"output file (found inputs={input_files}, outputs={output_files})"
         )
 
@@ -328,19 +336,22 @@ def load_program(cobol_source: Path, copybook_dir: Path | None = None) -> Progra
     extra_input_files = tuple(part.assignments[f] for f in input_files[1:])
     extra_input_layouts = tuple(flatten(_records_for(part, f)[0]) for f in input_files[1:])
 
-    output_records = _records_for(part, output_files[0])
     # Phase X7 (docs/specs/SUBPROGRAM_VERIFICATION_PLAN.md): a totals line
-    # is now optional -- one 01-level (detail line only) is accepted in
-    # addition to the original two (detail line then totals line). This
-    # is a new, additive branch; every existing fixture always declares
-    # two 01-levels and so always takes the exact code path it always
-    # took (has_totals=True below), unchanged.
-    if len(output_records) not in (1, 2):
-        raise UnsupportedProgramError(
-            f"output FD {output_files[0]} must declare one 01-level (detail "
-            f"line only) or two 01-levels (detail line then totals line), "
-            f"found {len(output_records)}"
-        )
+    # is optional per output file -- one 01-level (detail line only) is
+    # accepted in addition to the original two (detail line then totals
+    # line). Phase BB2 widens this to apply to every output file, not
+    # just the (now-primary) one -- every existing fixture has exactly one
+    # output file and always declared two 01-levels, so it always takes
+    # the exact code path it always took.
+    for f in output_files:
+        records = _records_for(part, f)
+        if len(records) not in (1, 2):
+            raise UnsupportedProgramError(
+                f"output FD {f} must declare one 01-level (detail line only) "
+                f"or two 01-levels (detail line then totals line), found {len(records)}"
+            )
+
+    output_records = _records_for(part, output_files[0])
     has_totals = len(output_records) == 2
 
     input_root = input_records[0]
@@ -380,6 +391,35 @@ def load_program(cobol_source: Path, copybook_dir: Path | None = None) -> Progra
         totals_ctor_map = {}
         accumulator_field, per_record_field = "", ""
 
+    # Phase BB2: every output file beyond the primary one, each derived by
+    # the exact same MOVE-based ctor-map/accumulator mechanism the primary
+    # output file already uses -- see ExtraOutputFile's own comment for
+    # why this stops short of conditional record routing.
+    extra_output_files: list[ExtraOutputFile] = []
+    for f in output_files[1:]:
+        f_records = _records_for(part, f)
+        f_has_totals = len(f_records) == 2
+        f_report_layout = flatten(f_records[0])
+        f_totals_layout = flatten(f_records[1]) if f_has_totals else ()
+        f_report_ctor_map = _ctor_map(unit.source, f_report_layout, input_fields, ws_name_set)
+        if f_has_totals:
+            f_totals_ctor_map = _ctor_map(driver.source, f_totals_layout, input_fields, ws_name_set)
+            f_accumulator_field, f_per_record_field = _accumulator(
+                unit.source, ws_name_set, f_totals_ctor_map
+            )
+        else:
+            f_totals_ctor_map = {}
+            f_accumulator_field, f_per_record_field = "", ""
+        extra_output_files.append(ExtraOutputFile(
+            file_name=part.assignments[f],
+            report_layout=f_report_layout,
+            totals_layout=f_totals_layout,
+            report_ctor_map=f_report_ctor_map,
+            totals_ctor_map=f_totals_ctor_map,
+            accumulator_field=f_accumulator_field,
+            per_record_field=f_per_record_field,
+        ))
+
     return ProgramModel(
         program_id=part.program_id,
         source_path=cobol_source,
@@ -400,6 +440,7 @@ def load_program(cobol_source: Path, copybook_dir: Path | None = None) -> Progra
         totals_ctor_map=totals_ctor_map,
         accumulator_field=accumulator_field,
         per_record_field=per_record_field,
+        extra_output_files=tuple(extra_output_files),
     )
 
 
@@ -435,6 +476,7 @@ def to_scaffold_spec(model: ProgramModel) -> ScaffoldSpec:
         per_record_field=model.per_record_field,
         report_ctor_map=model.report_ctor_map,
         totals_ctor_map=model.totals_ctor_map,
+        extra_output_files=model.extra_output_files,
     )
 
 

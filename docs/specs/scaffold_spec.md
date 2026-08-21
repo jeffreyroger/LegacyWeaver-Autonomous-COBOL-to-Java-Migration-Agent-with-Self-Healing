@@ -29,9 +29,20 @@ the exact subshape and why it stops short of a general COBOL MERGE). Every
 program with exactly one input file — every fixture before this phase —
 takes the identical code path it always has; this is additive, not a
 relaxation of the single-input-file contract for programs that still have
-one. Output-file count, `OCCURS`/`RENAMES`/`COPY REPLACING`, and the
-one-synthesis-unit-per-program limit are unchanged (see `tasks.md`'s
-Phase BB row for BB2/BB3/BB4, the not-yet-built further widenings).
+one. `OCCURS`/`RENAMES`/`COPY REPLACING` and the one-synthesis-unit-per-
+program limit are unchanged (see `tasks.md`'s Phase BB row for BB3/BB4,
+the not-yet-built further widenings).
+
+**Amended 2026-08-21 (Phase BB2).** "One output file" widened to "one or
+more output files" -- every input record writes unconditionally to every
+opened output file (see `weaver/agent/scaffold.py`'s `ExtraOutputFile`
+comment: which record goes to which file, i.e. conditional routing, would
+be real business-logic derivation and stays explicitly out of scope, not
+guessed at). Each output file's report/totals ctor-map and accumulator are
+derived by the exact same MOVE-based mechanism the primary output file
+already used, just applied per file. Every program with exactly one
+output file -- every fixture before this phase -- takes the identical
+code path it always has.
 
 ## 1. Record type per 01-level group
 

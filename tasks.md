@@ -69,14 +69,14 @@ be proven end-to-end yet, for a disclosed reason — not the same as untouched.
 
 User-directed proactive generalization of `weaver/cobol/frontend.py`'s
 originally narrow one-input/one-output scope. Broken into independently
-mergeable sub-phases (BB1 shipped; BB2/BB3/BB4 -- multiple output files,
-multiple unit paragraphs, no-output-file programs -- are planned, not yet
-built, same discipline as `SUBPROGRAM_VERIFICATION_PLAN.md`'s X1-X8).
+mergeable sub-phases (BB1/BB2 shipped; BB3/BB4 -- multiple unit paragraphs,
+no-output-file programs -- are planned, not yet built, same discipline as
+`SUBPROGRAM_VERIFICATION_PLAN.md`'s X1-X8).
 
 | # | Phase | Status |
 |---|---|---|
 | BB1 | Multiple input files, read in lockstep by position -- `weaver/cobol/frontend.py` (N-file parsing, per-file field resolution via `ar`/`ar2`/`ar3` accessors), `weaver/agent/scaffold.py` (`ScaffoldSpec.extra_input_files`/`extra_input_layouts`, N-file main loop, record-count guard), `weaver/execution.py` unaffected (still single-input-file oracle/candidate wiring -- BB1 is proven at the frontend+scaffold+javac layer, not yet wired into the file-based `Orchestrator`/`weaver verify` CLI path), `weaver/cobol/procedure.py` (new `reads()` scraper) + `fixtures/cobol_multiinput/multiinput.cob` (new, a master file joined against an adjustment file) | ✅ real: all 8 existing fixtures' byte-identical-output regression (`test_cobol_frontend.py`, `test_scaffold_redefines.py`) unchanged; `test_frontend_multi_input.py` proves real parsing, a real `javac`-compiled 2-input-file scaffold producing hand-verified-correct output, a real record-count-mismatch runtime guard, and a real `cobc`-oracle byte-for-byte comparison test (gated, ready whenever `cobc` is reachable). A real regex bug was found and fixed along the way: `\bREAD` false-matched inside `END-READ` (hyphen is a non-word character, so `\b` saw a boundary there) |
-| BB2 | Multiple output files (e.g. report + error file) | ❌ not built |
+| BB2 | Multiple output files, each written unconditionally once per record -- `weaver/agent/scaffold.py` (`ExtraOutputFile`, `ScaffoldSpec.extra_output_files`, per-file `ReportLine2`/`TotalsLine2`-style classes and write blocks), `weaver/cobol/frontend.py` (per-output-file ctor-map/accumulator derivation, reusing the exact same MOVE-based mechanism the primary output file already used) + `fixtures/cobol_multioutput/multioutput.cob` (new, a fee report plus a separate balance-audit log, each with its own totals line) | ✅ real: all existing byte-identical-output regressions unchanged; `test_frontend_multi_output.py` proves real parsing of two independently-derived output files, a real `javac`-compiled scaffold writing both files correctly (hand-verified arithmetic), and a real `cobc`-oracle byte-for-byte comparison test (gated). Disclosed narrowing: every record writes to every output file unconditionally -- conditional routing (which record goes where) would be real business-logic derivation, outside `weaver/cobol/procedure.py`'s declared scope, so it's explicitly not attempted |
 | BB3 | Multiple unit paragraphs per record (reusing Phase AA1's hierarchical-segment machinery) | ❌ not built |
 | BB4 | No output file (read-only/validation programs) | ❌ not built |
 
