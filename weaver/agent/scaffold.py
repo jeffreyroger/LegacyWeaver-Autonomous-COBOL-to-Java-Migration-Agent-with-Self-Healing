@@ -100,6 +100,21 @@ class ScaffoldSpec:
     # this phase has exactly one output file and takes the exact code
     # path it always has.
     extra_output_files: tuple[ExtraOutputFile, ...] = ()
+    # Phase BB3: additional synthesis-unit paragraphs beyond the primary
+    # one (`paragraph_id`/`paragraph_method`), called in sequence every
+    # iteration -- e.g. a validate-then-compute pair, each independently
+    # synthesizable (its own // PARAGRAPH:<id>:BEGIN/:END markers). Every
+    # unit shares the same (ar[, ar2, ...], ws) signature shape; which
+    # unit sets which report/totals field is derived by scanning every
+    # unit's source combined (see frontend.py), not declared here. Empty
+    # by default -- every ScaffoldSpec declared before this phase has
+    # exactly one unit paragraph and takes the exact code path it always
+    # has. Disclosed scope: proven at the frontend+scaffold+javac layer;
+    # wiring N units into the live synthesis/repair-loop Orchestrator
+    # (which still assumes one unit per program) is further work, the
+    # same disclosed limitation Phase BB1 left for extra input files.
+    extra_paragraph_ids: tuple[str, ...] = ()
+    extra_paragraph_methods: tuple[str, ...] = ()
 
 
 # Declared from the 88-levels in fixtures/cobol/copybooks/ACCOUNT-REC.cpy.
@@ -171,11 +186,15 @@ def extra_output_totals_class_name(index: int) -> str:
     return f"TotalsLine{index + 2}"
 
 
-def java_signature(spec: ScaffoldSpec) -> str:
+def java_signature(spec: ScaffoldSpec, method: str | None = None) -> str:
+    """Phase BB3: `method` defaults to `spec.paragraph_method` (the
+    primary unit, unchanged for every pre-BB3 caller); pass an extra
+    unit's own method name to get its signature -- every unit paragraph
+    shares the same (ar[, ar2, ...], ws) parameter shape."""
     extra_params = "".join(
         f", {cls} {param}" for cls, param in zip(extra_record_class_names(spec), extra_record_param_names(spec))
     )
-    return f"static void {spec.paragraph_method}(AccountRecord ar{extra_params}, WorkingStorage ws)"
+    return f"static void {method or spec.paragraph_method}(AccountRecord ar{extra_params}, WorkingStorage ws)"
 
 
 def ws_accessors(spec: ScaffoldSpec) -> dict[str, str]:
@@ -532,14 +551,25 @@ final class WorkingStorage {{
 """
 
 
-def _paragraph_stub(spec: ScaffoldSpec) -> str:
+def _one_paragraph_stub(spec: ScaffoldSpec, paragraph_id: str, method: str) -> str:
     return f"""\
-    {java_signature(spec)} {{
-        // PARAGRAPH:{spec.paragraph_id}:BEGIN
-        throw new UnsupportedOperationException("{spec.paragraph_id} not yet synthesized");
-        // PARAGRAPH:{spec.paragraph_id}:END
+    {java_signature(spec, method)} {{
+        // PARAGRAPH:{paragraph_id}:BEGIN
+        throw new UnsupportedOperationException("{paragraph_id} not yet synthesized");
+        // PARAGRAPH:{paragraph_id}:END
     }}
 """
+
+
+def _paragraph_stub(spec: ScaffoldSpec) -> str:
+    # Phase BB3: one stub per unit paragraph (primary + extras), each
+    # independently synthesizable. extra_paragraph_ids is empty for every
+    # spec declared before this phase, so this renders exactly the one
+    # stub it always has.
+    stub = _one_paragraph_stub(spec, spec.paragraph_id, spec.paragraph_method)
+    for pid, method in zip(spec.extra_paragraph_ids, spec.extra_paragraph_methods):
+        stub += "\n" + _one_paragraph_stub(spec, pid, method)
+    return stub
 
 
 def _main_class(spec: ScaffoldSpec) -> str:
@@ -627,7 +657,13 @@ def _main_class(spec: ScaffoldSpec) -> str:
         )
     else:
         loop_header = "        for (String rawLine : lines) {\n"
+    # Phase BB3: every unit paragraph (primary + extras) is called in
+    # sequence, once per record -- extra_paragraph_methods is empty for
+    # every spec declared before this phase, so this renders exactly the
+    # one call it always has.
     paragraph_call = f"            {spec.paragraph_method}(ar{extra_call_args}, ws);"
+    for method in spec.extra_paragraph_methods:
+        paragraph_call += f"\n            {method}(ar{extra_call_args}, ws);"
 
     # Phase BB2: N >= 0 extra output files, each written unconditionally
     # once per record (see ExtraOutputFile's own comment for why this

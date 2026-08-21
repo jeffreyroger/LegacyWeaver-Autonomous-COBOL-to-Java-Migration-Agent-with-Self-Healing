@@ -5,7 +5,7 @@
 `to_scaffold_spec()` converts that model into the `ScaffoldSpec` the
 existing K2 generator already consumes unchanged.
 
-Declared scope (Phase U, widened by Phases BB1/BB2). One or more input
+Declared scope (Phase U, widened by Phases BB1/BB2/BB3). One or more input
 files (read in lockstep by position when more than one -- see
 `weaver/agent/scaffold.py`'s `ScaffoldSpec.extra_input_files` comment) and
 one or more output files (every record written unconditionally to every
@@ -13,9 +13,11 @@ output file -- see `ScaffoldSpec.extra_output_files`/`ExtraOutputFile`;
 conditional routing is out of scope); DISPLAY usage only; exactly one
 01-level under every input FD and one-or-two under every output FD
 (detail line, then optionally a totals line -- see Phase X7); one driving
-paragraph followed by exactly one synthesis unit. Everything outside that
-raises — a frontend that guesses produces a plausible layout, and a
-plausible-but-wrong layout invalidates every byte comparison downstream.
+paragraph followed by one or more unit paragraphs, each `PERFORM`ed by the
+driver exactly once and called in sequence every record (see
+`ScaffoldSpec.extra_paragraph_ids`). Everything outside that raises — a
+frontend that guesses produces a plausible layout, and a plausible-but-
+wrong layout invalidates every byte comparison downstream.
 """
 
 from __future__ import annotations
@@ -26,7 +28,7 @@ from pathlib import Path
 
 from weaver.agent.scaffold import ConditionName, ExtraOutputFile, ScaffoldSpec, WorkingStorageField
 from weaver.agent.segment import segment
-from weaver.cobol import procedure
+from weaver.cobol import callgraph, procedure
 from weaver.cobol.data_division import (
     DataItem,
     UnsupportedDataItemError,
@@ -90,6 +92,13 @@ class ProgramModel:
     # every program with exactly one output file, i.e. every fixture
     # before this phase.
     extra_output_files: tuple[ExtraOutputFile, ...]
+    # Phase BB3: additional unit paragraphs beyond the primary one
+    # (paragraph_id/paragraph_method), called in sequence every record --
+    # see ScaffoldSpec.extra_paragraph_ids' comment. Empty for every
+    # program with exactly one unit paragraph, i.e. every fixture before
+    # this phase.
+    extra_paragraph_ids: tuple[str, ...]
+    extra_paragraph_methods: tuple[str, ...]
 
 
 # --------------------------------------------------------------------------
@@ -290,12 +299,29 @@ def load_program(cobol_source: Path, copybook_dir: Path | None = None) -> Progra
             f"found {len(paragraphs)}"
         )
     driver, units = paragraphs[0], paragraphs[1:]
-    if len(units) != 1:
+    if len(units) < 1:
         raise UnsupportedProgramError(
-            f"{cobol_source}: ScaffoldSpec holds a single synthesis unit; this program "
-            f"has {len(units)} ({[u.identifier for u in units]})"
+            f"{cobol_source}: expected at least one synthesis unit after the driving "
+            f"paragraph, found {len(units)}"
         )
     unit = units[0]
+    if len(units) > 1:
+        # Phase BB3: every extra unit beyond the primary one must be
+        # PERFORMed directly by the driving paragraph exactly once (the
+        # same "called once per record iteration" shape scaffold.py's
+        # sequential paragraph_call generates) -- never a helper paragraph
+        # performed conditionally, from another unit, or not at all.
+        known_units = {u.identifier for u in units}
+        performed = callgraph.performs(driver.source, known_units)
+        perform_counts = {u.identifier: 0 for u in units}
+        for edge in performed:
+            perform_counts[edge.target] = perform_counts.get(edge.target, 0) + 1
+        if any(count != 1 for count in perform_counts.values()):
+            raise UnsupportedProgramError(
+                f"{cobol_source}: with {len(units)} unit paragraphs, the driving "
+                f"paragraph {driver.identifier!r} must PERFORM each exactly once "
+                f"(no conditional/nested calls); found counts={perform_counts}"
+            )
 
     all_paragraph_source = "\n".join(p.source for p in paragraphs)
     modes = procedure.open_modes(all_paragraph_source)
@@ -380,12 +406,16 @@ def load_program(cobol_source: Path, copybook_dir: Path | None = None) -> Progra
         accessor = f"ar{i + 2}"
         input_fields.update({f.name: (accessor, f) for f in extra_layout})
     ws_name_set = set(ws_names)
+    # Phase BB3: which unit sets which field is derived by scanning every
+    # unit paragraph's source combined, not just the first -- for the N=1
+    # case (every fixture before this phase) this is exactly unit.source.
+    units_combined_source = "\n".join(u.source for u in units)
 
-    report_ctor_map = _ctor_map(unit.source, report_layout, input_fields, ws_name_set)
+    report_ctor_map = _ctor_map(units_combined_source, report_layout, input_fields, ws_name_set)
     if has_totals:
         totals_ctor_map = _ctor_map(driver.source, totals_layout, input_fields, ws_name_set)
         accumulator_field, per_record_field = _accumulator(
-            unit.source, ws_name_set, totals_ctor_map
+            units_combined_source, ws_name_set, totals_ctor_map
         )
     else:
         totals_ctor_map = {}
@@ -401,11 +431,11 @@ def load_program(cobol_source: Path, copybook_dir: Path | None = None) -> Progra
         f_has_totals = len(f_records) == 2
         f_report_layout = flatten(f_records[0])
         f_totals_layout = flatten(f_records[1]) if f_has_totals else ()
-        f_report_ctor_map = _ctor_map(unit.source, f_report_layout, input_fields, ws_name_set)
+        f_report_ctor_map = _ctor_map(units_combined_source, f_report_layout, input_fields, ws_name_set)
         if f_has_totals:
             f_totals_ctor_map = _ctor_map(driver.source, f_totals_layout, input_fields, ws_name_set)
             f_accumulator_field, f_per_record_field = _accumulator(
-                unit.source, ws_name_set, f_totals_ctor_map
+                units_combined_source, ws_name_set, f_totals_ctor_map
             )
         else:
             f_totals_ctor_map = {}
@@ -441,6 +471,8 @@ def load_program(cobol_source: Path, copybook_dir: Path | None = None) -> Progra
         accumulator_field=accumulator_field,
         per_record_field=per_record_field,
         extra_output_files=tuple(extra_output_files),
+        extra_paragraph_ids=tuple(u.identifier for u in units[1:]),
+        extra_paragraph_methods=tuple(java_method_name(u.identifier) for u in units[1:]),
     )
 
 
@@ -477,6 +509,8 @@ def to_scaffold_spec(model: ProgramModel) -> ScaffoldSpec:
         report_ctor_map=model.report_ctor_map,
         totals_ctor_map=model.totals_ctor_map,
         extra_output_files=model.extra_output_files,
+        extra_paragraph_ids=model.extra_paragraph_ids,
+        extra_paragraph_methods=model.extra_paragraph_methods,
     )
 
 

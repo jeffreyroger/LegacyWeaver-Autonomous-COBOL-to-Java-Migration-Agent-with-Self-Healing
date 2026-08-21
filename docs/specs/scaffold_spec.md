@@ -30,8 +30,8 @@ program with exactly one input file — every fixture before this phase —
 takes the identical code path it always has; this is additive, not a
 relaxation of the single-input-file contract for programs that still have
 one. `OCCURS`/`RENAMES`/`COPY REPLACING` and the one-synthesis-unit-per-
-program limit are unchanged (see `tasks.md`'s Phase BB row for BB3/BB4,
-the not-yet-built further widenings).
+program limit are unchanged (see `tasks.md`'s Phase BB row for BB4, the
+not-yet-built further widening).
 
 **Amended 2026-08-21 (Phase BB2).** "One output file" widened to "one or
 more output files" -- every input record writes unconditionally to every
@@ -43,6 +43,19 @@ derived by the exact same MOVE-based mechanism the primary output file
 already used, just applied per file. Every program with exactly one
 output file -- every fixture before this phase -- takes the identical
 code path it always has.
+
+**Amended 2026-08-21 (Phase BB3).** "Exactly one synthesis unit per
+program" widened to "one or more unit paragraphs, called in sequence
+every record" -- each extra unit must be `PERFORM`ed by the driving
+paragraph exactly once (`weaver/cobol/callgraph.py`'s existing `performs()`
+reused to check this, no new call-graph mechanism); which unit sets which
+report/totals field is derived by scanning every unit's source combined,
+not one unit alone. Every program with exactly one unit paragraph --
+every fixture before this phase -- takes the identical code path it
+always has. Disclosed scope: proven at the frontend+scaffold+javac layer
+only; the live synthesis/repair-loop `Orchestrator` still assumes one
+unit per program, so wiring N units through `weaver migrate`'s actual
+repair loop is further work (see `tasks.md`'s Phase BB row for BB3).
 
 ## 1. Record type per 01-level group
 
