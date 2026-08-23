@@ -7,6 +7,7 @@ and for the candidate-supplied-mode feature built the same day.
 from __future__ import annotations
 
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -27,7 +28,7 @@ def test_build_run_spec_threads_every_parameter():
     )
     spec = _build_run_spec(req)
 
-    assert str(spec.copybook_dir) == "fixtures/cobol/copybooks"
+    assert spec.copybook_dir == Path("fixtures/cobol/copybooks")
     assert spec.seed == 99
     assert spec.model == "some-other-model:1b"
     assert spec.max_repairs == 7
@@ -53,7 +54,7 @@ def test_build_run_spec_sets_candidate_body_path_when_synthesis_mode_false():
     )
     spec = _build_run_spec(req)
 
-    assert str(spec.candidate_body_path) == "reference/process_record.body.java"
+    assert spec.candidate_body_path == Path("reference/process_record.body.java")
 
 
 def test_create_run_rejects_synthesis_mode_false_without_candidate_path(tmp_path, monkeypatch):

@@ -165,6 +165,14 @@ def run_report(args: argparse.Namespace) -> int:
 
 
 def _compile_oracle(cobol_source: Path) -> Path:
+    """Compile the COBOL oracle with `cobc`.
+
+    Scoped local WSL delegation exception (CLAUDE.md rule 10, same as
+    weaver/execution.py's run_oracle): when no native `cobc` is on PATH and
+    WEAVER_COBC_VIA_WSL=1 is set, the compile is routed through
+    `wsl -e bash -lc` instead of invoked directly. A machine with native
+    `cobc` never touches this branch regardless of the env var.
+    """
     build_dir = cobol_source.parent / "build"
     build_dir.mkdir(parents=True, exist_ok=True)
     binary_path = build_dir / cobol_source.stem
@@ -172,10 +180,25 @@ def _compile_oracle(cobol_source: Path) -> Path:
 
     if not binary_path.exists() or binary_path.stat().st_mtime < cobol_source.stat().st_mtime:
         console.print(f"[cyan]Compiling oracle:[/cyan] {cobol_source}")
-        subprocess.run(
-            ["cobc", "-x", "-I", str(copybook_dir), "-o", str(binary_path), str(cobol_source)],
-            check=True,
-        )
+        import os
+        import shutil as _shutil
+
+        if _shutil.which("cobc") is None and os.environ.get("WEAVER_COBC_VIA_WSL") == "1":
+            from weaver.execution import _to_wsl_path
+
+            wsl_src = _to_wsl_path(cobol_source)
+            wsl_out = _to_wsl_path(binary_path)
+            wsl_copybook = _to_wsl_path(copybook_dir)
+            subprocess.run(
+                ["wsl", "-e", "bash", "-lc",
+                 f"cobc -x -I '{wsl_copybook}' -o '{wsl_out}' '{wsl_src}'"],
+                check=True,
+            )
+        else:
+            subprocess.run(
+                ["cobc", "-x", "-I", str(copybook_dir), "-o", str(binary_path), str(cobol_source)],
+                check=True,
+            )
     return binary_path
 
 

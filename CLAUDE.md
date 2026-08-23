@@ -185,6 +185,17 @@ harness, not as a replacement for it.
     `WEAVER_COBC_VIA_WSL`, and no other module may gain a WSL branch
     without its own disclosed exception here.
 
+    **Extended 2026-08-23 to the main `weaver verify` path:**
+    `weaver/cli.py`'s `_compile_oracle` and `weaver/execution.py`'s
+    `run_oracle` gained the identical opt-in WSL branch (same env var, same
+    native-`cobc`-absent gate), so `weaver verify` is runnable end-to-end
+    on this machine — compile *and* execute the oracle binary via
+    `wsl -e bash -lc`, same compiled artefact either way, only the shell
+    wrapper differs. `weaver/agent/mocked_verify.py` already reused this
+    exact pattern from `subprogram_verify.py` before this date; this is the
+    same reuse extended to the harness's primary entry point rather than a
+    new mechanism.
+
     **Scoped live-connector exception (2026-08-20, migration-framework-spec.md
     Section 4.2, Phase Z2):** `tests/test_connectors_live.py` may start local
     Docker containers (`postgres`, `rabbitmq`) and make real network calls to
