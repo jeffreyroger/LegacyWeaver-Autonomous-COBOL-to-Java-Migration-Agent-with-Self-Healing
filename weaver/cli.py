@@ -81,6 +81,10 @@ def build_parser() -> argparse.ArgumentParser:
                          help="Opt-in hosted gpt-4o-mini refinement pass after synthesis (requires OPENAI_API_KEY)")
     migrate.add_argument("--use-delta-debugging", action="store_true",
                          help="Opt-in ddmin-based minimal counterexample selection during repair")
+    migrate.add_argument("--leaf-first", action="store_true",
+                         help="Run the leaf-first cross-program DAG pipeline "
+                              "(migration-framework-spec.md Section 5); 'program' must be a "
+                              "directory of *.cob files, not a single file")
     migrate.add_argument("--run-dir", type=Path, default=None,
                          help="Run directory (default: runs/<run_id>)")
     migrate.add_argument("--json", action="store_true",
@@ -393,6 +397,77 @@ def _render_migrate_summary(run_dir: Path, results: dict) -> None:
     console.print(f"[cyan]Metrics:[/cyan] weaver report {run_dir}")
 
 
+def _render_leaf_first_summary(run_dir: Path, results: dict[str, dict]) -> None:
+    table = Table(title="Leaf-first migration summary")
+    table.add_column("Program")
+    table.add_column("Unit")
+    table.add_column("Status")
+    table.add_column("Model calls")
+    table.add_column("Duration")
+    for program_name, program_results in results.items():
+        for unit_id, r in program_results.items():
+            colour = _OUTCOME_COLOURS.get(r.status, "cyan")
+            table.add_row(
+                program_name, unit_id,
+                f"[{colour}]{r.status}[/{colour}]",
+                str(r.model_calls),
+                f"{r.duration_seconds:.1f}s",
+            )
+    console.print(table)
+    console.print(f"[cyan]Run directory:[/cyan] {run_dir}")
+
+
+def run_migrate_leaf_first(args: argparse.Namespace) -> int:
+    """`weaver migrate --leaf-first` (migration-framework-spec.md Section 5)
+    -- drive weaver.agent.leaf_orchestrator.LeafOrchestrator over a
+    directory of *.cob files in DAG leaf-first order, instead of the
+    single-program Orchestrator. 'program' is reinterpreted as that
+    directory. Does not yet support cooperative Ctrl-C cancellation or
+    live event streaming (LeafOrchestrator has no cancel_requested/on_event
+    parameters) -- a disclosed gap versus the single-program path below.
+    """
+    from weaver.agent.leaf_orchestrator import LeafOrchestrator
+
+    if not args.program.is_dir():
+        console.print(f"[red]--leaf-first requires 'program' to be a directory of *.cob files, "
+                       f"got a file: {args.program}[/red]")
+        return 2
+
+    base_spec = build_migrate_spec(args)
+    run_id = uuid.uuid4().hex
+    run_dir = args.run_dir or (RUNS_ROOT / run_id)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "params.json").write_text(json.dumps(base_spec.to_dict(), indent=2), encoding="utf-8")
+
+    orchestrator = LeafOrchestrator(program_dir=args.program, base_spec=base_spec,
+                                     work_root=run_dir / "leaf_orchestrator")
+    try:
+        results = orchestrator.run()
+    except KeyboardInterrupt:
+        console.print("[yellow]--leaf-first has no mid-DAG cancellation point yet; "
+                       "the current program's run was interrupted uncleanly.[/yellow]")
+        return 130
+
+    all_committed = all(
+        r.status == "committed" for program_results in results.values() for r in program_results.values()
+    )
+    exit_code = 0 if all_committed else 1
+
+    if args.json:
+        print(json.dumps({
+            "run_dir": str(run_dir),
+            "programs": {
+                program_name: {uid: dataclasses.asdict(r) for uid, r in program_results.items()}
+                for program_name, program_results in results.items()
+            },
+            "exit_code": exit_code,
+        }, indent=2, default=str))
+    else:
+        _render_leaf_first_summary(run_dir, results)
+
+    return exit_code
+
+
 def run_migrate(args: argparse.Namespace) -> int:
     """`weaver migrate` (SRS 3.9.1) -- drive the orchestrator from the terminal.
 
@@ -400,6 +475,9 @@ def run_migrate(args: argparse.Namespace) -> int:
     same files into the run directory, so `weaver report <run_dir>` and the
     service's GET /runs/{id} read identical inputs (DC-5).
     """
+    if args.leaf_first:
+        return run_migrate_leaf_first(args)
+
     spec = build_migrate_spec(args)
     run_id = uuid.uuid4().hex
     run_dir = args.run_dir or (RUNS_ROOT / run_id)

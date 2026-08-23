@@ -24,10 +24,17 @@ through the ordinary `weaver.agent.orchestrator.Orchestrator`.
 `orchestrator_factory` (as `tests/test_leaf_orchestrator.py`'s Task 8
 tests do) bypasses kind-based dispatch entirely -- that factory is called
 uniformly for every program name, exactly as it always was, so those
-tests keep passing unmodified. The scope note Task 8 originally recorded
-here (registering `ROOT.cob` with the file-based frontend, Phase X7) is
-still outstanding and still governs `_run_file_based`'s own use of the
-real `Orchestrator` against `ROOT.cob` specifically.
+tests keep passing unmodified.
+
+**Phase X7, closed 2026-08-23 (weaver migrate --leaf-first wiring).**
+`ROOT.cob` is registered in `weaver/agent/program_profiles.py`, with a
+real golden output (`fixtures/data/multiprog/expected/golden_root.out`,
+produced by compiling `root.cob`/`leaf_a.cob`/`leaf_b.cob` together via
+one real `cobc -x` invocation and hand-verified on 3 of 6 records).
+`_run_file_based` now resolves each file-based DAG node's own
+golden_output/scaffold_spec/scaffold_path/reference_* via
+`program_profiles.program_profile(cobol_file)` instead of reusing
+`base_spec`'s blindly -- the gap this note used to describe.
 
 Never replaces per-program Orchestrator/SubprogramOrchestrator or their
 verification -- this module only sequences DAG order and supplies the
@@ -129,8 +136,29 @@ class LeafOrchestrator:
                 self.verified_children[program_name] = cache_dir
 
     def _run_file_based(self, program_name: str, cobol_file: Path, stub_dir: Path | None) -> None:
+        # Phase X7 (previously outstanding, see module docstring): each
+        # file-based DAG node gets its OWN golden_output/scaffold_spec/
+        # scaffold_path/reference_* resolved via program_profiles.py,
+        # exactly like a single-program `weaver migrate` run would --
+        # never base_spec's blindly reused across every file-based program
+        # in the directory, which would silently verify e.g. ROOT.cob
+        # against whatever program base_spec happened to be built for.
+        from weaver.agent.program_profiles import program_profile
+
+        profile = program_profile(cobol_file)
+        profile_kwargs: dict[str, object] = {}
+        if profile is not None:
+            profile_kwargs = {
+                "golden_output": profile.golden_output or self.base_spec.golden_output,
+                "scaffold_spec": profile.scaffold_spec or self.base_spec.scaffold_spec,
+                "scaffold_path": profile.scaffold_path or self.base_spec.scaffold_path,
+                "reference_body_path": profile.reference_body_path or self.base_spec.reference_body_path,
+                "reference_paragraph_id": profile.reference_paragraph_id or self.base_spec.reference_paragraph_id,
+                "input_data": profile.input_data or self.base_spec.input_data,
+            }
         program_spec = self.base_spec.replace(
             cobol_source=cobol_file,
+            **profile_kwargs,
             **({"unit_cache_dir": stub_dir, "use_unit_cache": True} if stub_dir is not None else {}),
         )
         orchestrator = _default_orchestrator_factory(program_spec)

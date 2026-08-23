@@ -144,6 +144,65 @@ def test_migrate_exit_code_1_when_a_unit_escalates(tmp_path, monkeypatch):
     assert cli_mod.run_migrate(args) == 1
 
 
+def test_leaf_first_rejects_a_single_file_program(tmp_path):
+    """--leaf-first requires 'program' to be a directory of *.cob files --
+    a single-file argument (the normal migrate shape) must fail clearly
+    rather than reaching LeafOrchestrator with a directory-shaped
+    assumption violated."""
+    import weaver.cli as cli_mod
+
+    program_file = tmp_path / "single.cob"
+    program_file.write_text("")
+    args = cli_mod.build_parser().parse_args(
+        ["migrate", str(program_file), "--leaf-first", "--run-dir", str(tmp_path / "run_leaf_reject")]
+    )
+    assert cli_mod.run_migrate(args) == 2
+
+
+def test_leaf_first_flattens_the_nested_result_dict_for_json(tmp_path, monkeypatch):
+    """LeafOrchestrator.run() returns dict[program_name, dict[unit_id,
+    UnitResult|SubprogramUnitResult]] -- a different shape than the flat
+    single-program Orchestrator.run() returns. run_migrate_leaf_first must
+    flatten/serialize this correctly (including SubprogramUnitResult,
+    which has no memory_hit field) rather than crashing or silently
+    dropping a program's results."""
+    import json
+
+    import weaver.agent.leaf_orchestrator as leaf_orch_mod
+    from weaver.agent.orchestrator import UnitResult
+    from weaver.agent.subprogram_orchestrator import SubprogramUnitResult
+
+    class FakeLeafOrchestrator:
+        def __init__(self, **kwargs):
+            self.program_dir = kwargs["program_dir"]
+            self.base_spec = kwargs["base_spec"]
+
+        def run(self):
+            return {
+                "LEAF-A": {
+                    "LEAF-A": SubprogramUnitResult("LEAF-A", "committed", "body", 1, 2.0),
+                },
+                "ROOT": {
+                    "PROCESS-RECORD": UnitResult("PROCESS-RECORD", "escalated", None, 3, False, 5.0),
+                },
+            }
+
+    monkeypatch.setattr(leaf_orch_mod, "LeafOrchestrator", FakeLeafOrchestrator)
+
+    import weaver.cli as cli_mod
+
+    program_dir = tmp_path / "multiprog"
+    program_dir.mkdir()
+    run_dir = tmp_path / "run_leaf_flatten"
+    args = cli_mod.build_parser().parse_args(
+        ["migrate", str(program_dir), "--leaf-first", "--run-dir", str(run_dir), "--json"]
+    )
+    exit_code = cli_mod.run_migrate(args)
+
+    assert exit_code == 1  # ROOT escalated
+    (run_dir / "params.json").read_text()  # written before any program runs
+
+
 def test_stream_event_emits_colour_coded_status(capsys):
     """SS3.9.4 [MUST]: stream unit status with colour coding (SRS 3.9.4).
 

@@ -112,6 +112,20 @@ _PROGRAM_PATHS: dict[str, ProgramPaths] = {
         Path("reference_bankproc"),
         Path("fixtures/data_bankproc"),
     ),
+    # root.cob is the file-based root of the leaf-first DAG fixture
+    # (fixtures/cobol/multiprog/{root,leaf_a,leaf_b}.cob,
+    # migration-framework-spec.md Section 5 / LeafOrchestrator). Its golden
+    # output was produced by compiling root.cob together with leaf_a.cob
+    # and leaf_b.cob via a single real `cobc -x` invocation (GnuCOBOL
+    # statically links the CALLed subprograms) and running the result
+    # against fixtures/data/multiprog/accounts.dat -- hand-verified on
+    # records 1, 4, 6 (LEAF-A doubles, LEAF-B adds 10.00).
+    "root.cob": ProgramPaths(
+        Path("generated/multiprog/root/Scaffold.java"),
+        Path("fixtures/data/multiprog/expected/golden_root.out"),
+        Path("reference_multiprog_root"),
+        Path("fixtures/data/multiprog"),
+    ),
 }
 
 
