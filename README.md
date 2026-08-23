@@ -108,9 +108,11 @@ and Ctrl-C stops cleanly at the next unit boundary.
 --data FILE         input data file used for verification
 --out DIR           output directory for generated Java
 --max-repairs 3     repair attempts per unit
---model TAG         local inference model (default qwen2.5-coder:7b)
+--model TAG         local inference model (default granite-code:20b)
 --seed 42           inference seed
 --replay            serve model responses exclusively from cache
+--use-text-refinement   opt-in hosted gpt-4o-mini refinement pass after synthesis (requires OPENAI_API_KEY)
+--use-delta-debugging   opt-in ddmin-based minimal counterexample selection during repair
 ```
 
 Each run writes `runs/<run_id>/` containing `params.json`, `trace.jsonl`,

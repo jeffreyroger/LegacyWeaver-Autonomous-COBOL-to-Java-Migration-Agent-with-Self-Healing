@@ -77,6 +77,10 @@ def build_parser() -> argparse.ArgumentParser:
     migrate.add_argument("--seed", type=int, default=DEFAULT_SEED, help="Inference seed")
     migrate.add_argument("--replay", action="store_true",
                          help="FR-8.4: serve model responses exclusively from cache")
+    migrate.add_argument("--use-text-refinement", action="store_true",
+                         help="Opt-in hosted gpt-4o-mini refinement pass after synthesis (requires OPENAI_API_KEY)")
+    migrate.add_argument("--use-delta-debugging", action="store_true",
+                         help="Opt-in ddmin-based minimal counterexample selection during repair")
     migrate.add_argument("--run-dir", type=Path, default=None,
                          help="Run directory (default: runs/<run_id>)")
     migrate.add_argument("--json", action="store_true",
@@ -320,6 +324,8 @@ def build_migrate_spec(args: argparse.Namespace) -> RunSpec:
         model=args.model,
         seed=args.seed,
         replay=args.replay,
+        use_text_refinement=args.use_text_refinement,
+        use_delta_debugging=args.use_delta_debugging,
     )
 
 

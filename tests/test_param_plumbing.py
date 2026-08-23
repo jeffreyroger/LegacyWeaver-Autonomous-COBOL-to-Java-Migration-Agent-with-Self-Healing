@@ -145,6 +145,32 @@ def test_use_text_refinement_is_read_by_orchestrator():
     assert "use_text_refinement" in source
 
 
+def test_migrate_cli_threads_use_text_refinement_and_delta_debugging():
+    """weaver/cli.py's build_migrate_spec docstring says 'every flag must
+    land in the spec -- a flag that parses but never reaches the
+    orchestrator is the exact defect Task 1 fixed.' use_text_refinement and
+    use_delta_debugging are real, already-tested RunSpec fields that
+    orchestrator.py/repair_loop.py already consume correctly, but until
+    this test existed no CLI flag ever set either of them True -- both
+    were permanently dead from `weaver migrate`."""
+    from weaver.cli import build_parser, build_migrate_spec
+
+    parser = build_parser()
+
+    args_on = parser.parse_args([
+        "migrate", "fixtures/cobol/interest.cob",
+        "--use-text-refinement", "--use-delta-debugging",
+    ])
+    spec_on = build_migrate_spec(args_on)
+    assert spec_on.use_text_refinement is True
+    assert spec_on.use_delta_debugging is True
+
+    args_off = parser.parse_args(["migrate", "fixtures/cobol/interest.cob"])
+    spec_off = build_migrate_spec(args_off)
+    assert spec_off.use_text_refinement is False
+    assert spec_off.use_delta_debugging is False
+
+
 def test_verify_candidate_uses_injected_input_data(tmp_path, monkeypatch):
     from weaver.agent import verify as verify_mod
 
