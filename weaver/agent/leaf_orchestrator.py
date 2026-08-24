@@ -26,6 +26,18 @@ tests do) bypasses kind-based dispatch entirely -- that factory is called
 uniformly for every program name, exactly as it always was, so those
 tests keep passing unmodified.
 
+**Cross-program CALL semantics, added 2026-08-23.** A file-based parent's
+paragraph source routinely contains an opaque `CALL "LEAF-A" USING ...` --
+the synthesis prompt otherwise has no way to tell the model what that
+subprogram actually does. Once a subprogram commits, `_run_subprogram`
+renders a few of its just-harvested real witness input/output pairs into
+`self.call_semantics[program_name]`; `_run_file_based` looks up its own
+DAG callees' entries and threads them into the parent's
+`RunSpec.extra_prompt_context` (`weaver/agent/prompt.py`), so the model
+sees real, currently-verified oracle behavior instead of guessing from a
+program name. Never fabricated -- only ever built from committed
+subprograms' real `cobc` output.
+
 **Phase X7, closed 2026-08-23 (weaver migrate --leaf-first wiring).**
 `ROOT.cob` is registered in `weaver/agent/program_profiles.py`, with a
 real golden output (`fixtures/data/multiprog/expected/golden_root.out`,
@@ -94,6 +106,14 @@ class LeafOrchestrator:
     verified_children: dict[str, Path] = field(default_factory=dict, init=False)
     # program name -> the run's dict[str, UnitResult]-shaped result, for callers/tests.
     program_results: dict[str, dict] = field(default_factory=dict, init=False)
+    # program name -> real-witness "what this subprogram actually does"
+    # text, built once a subprogram commits (2026-08-23, migration-
+    # framework-spec.md Section 5 "Upstream Propagation") -- threaded into
+    # a calling file-based program's synthesis prompt via
+    # RunSpec.extra_prompt_context so the parent's paragraph, which only
+    # ever sees an opaque `CALL "LEAF-A" USING ...`, can learn the
+    # subprogram's real observed behavior instead of guessing from its name.
+    call_semantics: dict[str, str] = field(default_factory=dict, init=False)
 
     def run(self) -> dict[str, dict]:
         dag = from_directory(self.program_dir)
@@ -120,7 +140,7 @@ class LeafOrchestrator:
         if kind == "subprogram":
             self._run_subprogram(program_name, cobol_file)
         else:
-            self._run_file_based(program_name, cobol_file, stub_dir)
+            self._run_file_based(program_name, cobol_file, stub_dir, dag)
 
     def _run_with_injected_factory(self, program_name: str, cobol_file: Path, stub_dir: Path | None) -> None:
         program_spec = self.base_spec.replace(
@@ -135,7 +155,12 @@ class LeafOrchestrator:
             if cache_dir is not None:
                 self.verified_children[program_name] = cache_dir
 
-    def _run_file_based(self, program_name: str, cobol_file: Path, stub_dir: Path | None) -> None:
+    def _call_semantics_for(self, program_name: str, dag) -> str:
+        callee_names = {e.callee for e in dag.edges if e.caller == program_name}
+        blocks = [self.call_semantics[c] for c in sorted(callee_names) if c in self.call_semantics]
+        return "\n\n".join(blocks)
+
+    def _run_file_based(self, program_name: str, cobol_file: Path, stub_dir: Path | None, dag=None) -> None:
         # Phase X7 (previously outstanding, see module docstring): each
         # file-based DAG node gets its OWN golden_output/scaffold_spec/
         # scaffold_path/reference_* resolved via program_profiles.py,
@@ -156,6 +181,9 @@ class LeafOrchestrator:
                 "reference_paragraph_id": profile.reference_paragraph_id or self.base_spec.reference_paragraph_id,
                 "input_data": profile.input_data or self.base_spec.input_data,
             }
+        call_semantics = self._call_semantics_for(program_name, dag) if dag is not None else ""
+        if call_semantics:
+            profile_kwargs["extra_prompt_context"] = call_semantics
         program_spec = self.base_spec.replace(
             cobol_source=cobol_file,
             **profile_kwargs,
@@ -221,6 +249,72 @@ class LeafOrchestrator:
         path = unit_cache.cache_path(cache_dir, cobol_file.stem, model.paragraph_id)
         unit_cache.save(cache, path)
         self.verified_children[program_name] = cache_dir
+        self.call_semantics[program_name] = self._render_call_semantics(program_name, model, fixtures)
+
+    @staticmethod
+    def _render_call_semantics(program_name: str, model, fixtures) -> str:
+        """Real witness input/output pairs from the just-harvested UnitCache
+        (never fabricated -- every value came from a real, currently-
+        compiled cobc run), rendered as worked examples a calling program's
+        synthesis prompt can read.
+
+        Found 2026-08-23: showing raw (input, output) pairs alone and
+        asking the model to translate the CALL directly was not enough --
+        granite-code:20b ignored the examples and fell back to a memorized
+        COBOL idiom (`ar.isDormant()`, which doesn't exist in this
+        program's context at all) instead of reasoning about the numbers.
+        A step-by-step probe (compute the ratio/difference yourself, THEN
+        write the assignment) reliably worked instead. So: fit the
+        smallest-magnitude witnesses (least likely to have hit an overflow
+        truncation boundary) against the two shapes this project's fixture
+        set actually needs -- constant multiplier, constant additive
+        offset -- and state the fitted relationship as an already-verified
+        fact when one fits exactly. This is a disclosed narrow subshape,
+        not general function inference: a subprogram whose real behavior
+        is neither of these two shapes gets only the raw examples below,
+        same as before.
+        """
+        from weaver.agent.subprogram_verify import _from_raw
+
+        in_scale = model.input_param.decimal_scale
+        out_scale = model.output_param.decimal_scale
+        decoded = []
+        for fx in fixtures:
+            in_raw = fx.input_state[model.input_param.name]
+            out_raw = fx.output_state[model.output_param.name]
+            decoded.append((_from_raw(in_raw, in_scale), _from_raw(out_raw, out_scale)))
+        decoded.sort(key=lambda pair: abs(pair[0]))
+        sample = decoded[:5]
+
+        lines = [f"    input={i} -> output={o}" for i, o in sample]
+        examples = "\n".join(lines)
+
+        formula_note = ""
+        nonzero = [(i, o) for i, o in sample if i != 0]
+        ratios = {o / i for i, o in nonzero}
+        diffs = {o - i for i, o in sample}
+        if nonzero and len(ratios) == 1:
+            k = ratios.pop()
+            formula_note = (
+                f"\n\nFitted relationship, verified exactly on every example above: "
+                f"output = input * {k}. This IS this subprogram's real behavior on these "
+                f"witnesses -- use it directly, do not re-derive it differently. If your "
+                f"own paragraph's output field is narrower than this subprogram's, the real "
+                f"oracle may truncate high-order digits on overflow (see this prompt's "
+                f"overflow-truncation rule, if present, for how to replicate that)."
+            )
+        elif len(diffs) == 1:
+            k = diffs.pop()
+            formula_note = (
+                f"\n\nFitted relationship, verified exactly on every example above: "
+                f"output = input + {k}. This IS this subprogram's real behavior on these "
+                f"witnesses -- use it directly, do not re-derive it differently."
+            )
+
+        return (
+            f'CALL "{program_name}" behavior (observed from the real, currently-compiled '
+            f"COBOL oracle -- not a guess; treat as ground truth):\n{examples}{formula_note}"
+        )
 
     def _select_stub_dir(self, callee_names: set[str]) -> Path | None:
         # All of a program's already-verified callees must share one

@@ -102,13 +102,15 @@ Semantic rules -- these are absolute, not stylistic preferences:
 2. All numeric values are exact decimal at their declared scale
    (java.math.BigDecimal). Binary floating point (float, double) is
    forbidden anywhere in the returned body.
-3. A REDEFINES field reads the same bytes as its target and must be
-   accessed only through the accessor method already provided for it
-   (e.g. ar.dormant()) -- never re-derived, never treated as a separate
-   field.
-4. Condition names (88-levels) are evaluated only through the boolean
-   accessor already provided for them (e.g. ar.isPremium()) -- never by
-   comparing the parent field to a literal string yourself.
+3. If, and only if, a field in the field table below is described as a
+   REDEFINES accessor, read it only through that exact accessor method --
+   never re-derived, never treated as a separate field. If no field below
+   is described that way, this rule does not apply to this paragraph.
+4. If, and only if, the condition-name table below is non-empty, evaluate
+   each listed condition only through its exact accessor method shown
+   there -- never by comparing the parent field to a literal string
+   yourself. If that table says "(none)", this paragraph has no condition
+   names available at all -- do not invent, assume, or reference one.
 """
 
 WORKED_EXAMPLE = """\
@@ -141,6 +143,44 @@ call names DOWN explicitly, and the condition is read through its boolean
 accessor, never a string comparison.
 """
 
+# Found 2026-08-23 (fixtures/cobol/multiprog/root.cob, a paragraph with no
+# IF/EVALUATE at all -- just unconditional assignments): showing an
+# if/else-shaped worked example unconditionally, even to a paragraph with
+# no conditional logic of its own, reliably made the model invent a
+# nonexistent condition (`ar.isInvalid()` or similar) and wrap unrelated
+# straight-line logic in it anyway -- the worked example's SHAPE, not just
+# its wording, is a strong prior. build_synthesis_prompt now picks this
+# straight-line variant whenever the paragraph itself has no IF/EVALUATE,
+# so the shown style always matches the target paragraph's own structure.
+WORKED_EXAMPLE_STRAIGHT_LINE = """\
+Worked example (a different, fictitious paragraph -- shown only to
+illustrate the required style; do not reuse its logic or field names):
+
+COBOL:
+    COMPUTE-SURCHARGE.
+        COMPUTE WS-SURCHARGE = AC-BALANCE * 0.02.
+        ADD 1 TO WS-SURCHARGE.
+
+Correct Java body for that example, respecting every rule above:
+    ws.surcharge = ac.balance.multiply(new java.math.BigDecimal("0.02"))
+        .setScale(2, java.math.RoundingMode.DOWN);
+    ws.surcharge = ws.surcharge.add(java.math.BigDecimal.ONE);
+
+Correct JSON response for that example:
+{"method_body": "ws.surcharge = ac.balance.multiply(new java.math.BigDecimal(\\"0.02\\")).setScale(2, java.math.RoundingMode.DOWN);\\nws.surcharge = ws.surcharge.add(java.math.BigDecimal.ONE);", "assumptions": []}
+
+Notice: this paragraph has no IF/EVALUATE, so its Java translation has no
+conditional either -- do NOT add an if/else, a condition check, or any
+branch that isn't in the actual COBOL paragraph you are translating below.
+Every BigDecimal/RoundingMode reference is fully qualified as
+java.math.BigDecimal / java.math.RoundingMode (the scaffold declares no
+imports, so an unqualified type name will not compile), and every
+setScale call names DOWN explicitly.
+"""
+
+_CONDITIONAL_RE = re.compile(r"\b(IF|EVALUATE)\b", re.IGNORECASE)
+
+
 def _join_and(items: list[str]) -> str:
     """['a', 'b'] -> 'a and b'; ['a', 'b', 'c'] -> 'a, b and c'.
 
@@ -159,6 +199,16 @@ def _prohibitions(spec: ScaffoldSpec) -> str:
     settable = _join_and(
         [f"ws.{a.split('.')[-1]}" for a in sorted(ws_accessors(spec).values())]
     ) or "(none)"
+    # A program with no running-total accumulator (e.g. a per-record report
+    # with no TOTALS line) has spec.accumulator_field == "" -- the bullet
+    # below used to render as the malformed "write to ws. -- ..." in that
+    # case (found 2026-08-23 while debugging ROOT.cob's synthesis prompt).
+    # Omit the bullet entirely rather than describe a field that doesn't exist.
+    accumulator_bullet = (
+        f"- write to ws.{spec.accumulator_field} -- the generated main loop owns that\n"
+        f"  accumulation; this paragraph only sets {settable}\n"
+        if spec.accumulator_field else ""
+    )
     return f"""\
 Prohibitions -- the returned body must not:
 - declare or reference any field not listed in the field table below
@@ -166,9 +216,7 @@ Prohibitions -- the returned body must not:
 - modify any scaffold class (AccountRecord, ReportLine, TotalsLine,
   WorkingStorage, CobolEdit) -- you may only call the accessors it exposes
 - use float, double, Math.round, or any ROUNDED-style rounding call
-- write to ws.{spec.accumulator_field} -- the generated main loop owns that
-  accumulation; this paragraph only sets {settable}
-"""
+{accumulator_bullet}"""
 
 
 OUTPUT_CONTRACT = """\
@@ -182,7 +230,7 @@ Output contract -- respond with exactly one JSON object, nothing else
 
 
 def build_synthesis_prompt(paragraph: Paragraph, context: DataContext, java_signature: str,
-                            spec: ScaffoldSpec = INTEREST_SPEC) -> str:
+                            spec: ScaffoldSpec = INTEREST_SPEC, extra_context: str = "") -> str:
     owned = ws_scaffold_owned(spec)
     accessors = ws_accessors(spec)
     # COBOL WS name -> declared scale, so the field table states each
@@ -215,24 +263,42 @@ def build_synthesis_prompt(paragraph: Paragraph, context: DataContext, java_sign
     owned_lines = _scaffold_owned_lines(paragraph, spec)
     if owned_lines:
         owned_list = "\n".join(f"    {line}" for line in owned_lines)
+        # spec.accumulator_field is "" for a program with no running total
+        # (e.g. fixtures/cobol/multiprog/root.cob) -- "writing to ws." with
+        # nothing after the dot is a real, found-2026-08-23 wording bug for
+        # that case; only mention the accumulator when one actually exists.
+        accumulator_mention = (
+            f" and/or the running total, which the generated main loop already does"
+            f"\noutside this method (see the prohibition above against writing to"
+            f"\nws.{spec.accumulator_field})"
+            if spec.accumulator_field else ""
+        )
         scaffold_owned_section = f"""\
 Statements you must NOT translate -- the paragraph source below includes
-the following statements verbatim, but they populate the output record
-and/or the running total, which the generated main loop already does
-outside this method (see the prohibition above against writing to
-ws.{spec.accumulator_field}). Omit every one of these from your returned body:
+the following statements verbatim, but they populate the output record{accumulator_mention}.
+Omit every one of these from your returned body:
 {owned_list}
 
 """
     else:
         scaffold_owned_section = ""
 
+    if extra_context:
+        extra_context_section = f"""\
+{extra_context}
+
+"""
+    else:
+        extra_context_section = ""
+
+    worked_example = WORKED_EXAMPLE if _CONDITIONAL_RE.search(paragraph.source) else WORKED_EXAMPLE_STRAIGHT_LINE
+
     return f"""\
 {ROLE}
 
 {SEMANTIC_RULES}
-{WORKED_EXAMPLE}
-Field table for this paragraph's context:
+{worked_example}
+{extra_context_section}Field table for this paragraph's context:
 {field_table}
 
 Condition names in scope:

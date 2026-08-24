@@ -107,6 +107,18 @@ class RunSpec:
     # divergences[0]-based prompt content unchanged.
     use_delta_debugging: bool = False
 
+    # LeafOrchestrator cross-program CALL semantics (2026-08-23,
+    # migration-framework-spec.md Section 5 "Upstream Propagation"):
+    # opt-in extra text appended verbatim to build_synthesis_prompt's
+    # output, describing what an already-verified CALLed subprogram
+    # actually does (real witness input/output pairs from its harvested
+    # UnitCache) -- the parent program's synthesis prompt otherwise has no
+    # channel to learn a CALLed subprogram's behavior beyond its opaque
+    # name. Empty by default; every existing single-program run is
+    # byte-for-byte unaffected. Never fabricated: only ever built from
+    # real, currently-compiled oracle output (leaf_orchestrator.py).
+    extra_prompt_context: str = ""
+
     @classmethod
     def default(cls) -> RunSpec:
         return cls()

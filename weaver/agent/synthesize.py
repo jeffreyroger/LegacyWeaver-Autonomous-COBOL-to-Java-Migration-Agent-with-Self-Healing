@@ -45,7 +45,8 @@ def synthesize_paragraph(paragraph: Paragraph, client: InferenceClient, *, spec:
     scaffold_spec = spec.scaffold_spec
     context = build_context(paragraph, scaffold_spec)
     java_signature = scaffold_java_signature(scaffold_spec)
-    prompt = build_synthesis_prompt(paragraph, context, java_signature, scaffold_spec)
+    prompt = build_synthesis_prompt(paragraph, context, java_signature, scaffold_spec,
+                                     extra_context=spec.extra_prompt_context)
 
     raw_responses: list[str] = []
     last_error: ValidationError | None = None

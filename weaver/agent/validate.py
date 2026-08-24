@@ -144,11 +144,27 @@ def parse_response(raw_text: str) -> SynthesizedBody:
     return SynthesizedBody(method_body=data["method_body"], assumptions=list(data["assumptions"]))
 
 
+_LOCAL_ASSIGNMENT_RE = re.compile(r"\b([a-zA-Z_]\w*)\s*=(?!=)")
+
+
 def static_reject(body: SynthesizedBody, allowed_identifiers: set[str]) -> None:
     """Raise ValidationError if the body violates a hard prohibition."""
     for reason, pattern in _FORBIDDEN_PATTERNS.items():
         if pattern.search(body.method_body):
             raise ValidationError("forbidden construct", reason)
+
+    # A body-local variable the candidate itself declares and assigns
+    # (`java.math.BigDecimal x = ...;`) is not "outside the supplied
+    # context" -- only names the model invented without ever assigning
+    # them are. Found 2026-08-23: a correct, compiling truncation-on-
+    # overflow candidate for LEAF-A was rejected here because it declared
+    # an intermediate `scaledValue`/`truncated` local and called a method
+    # on it, and the identifier check only ever whitelisted the paragraph's
+    # external inputs, never anything the body defines for itself. `x = 5`
+    # (assignment) is matched; `x == 5`/`x != 5`/`x <= 5` (comparisons) are
+    # not, since `(?!=)` excludes a directly-following second `=`.
+    locally_assigned = set(_LOCAL_ASSIGNMENT_RE.findall(body.method_body))
+    allowed_identifiers = allowed_identifiers | locally_assigned
 
     referenced = set(re.findall(r"\b[a-z][a-zA-Z0-9]*\.[a-zA-Z][a-zA-Z0-9]*\b", body.method_body))
     java_keywords_prefixes = {"java.", "System.", "BigDecimal.", "RoundingMode."}

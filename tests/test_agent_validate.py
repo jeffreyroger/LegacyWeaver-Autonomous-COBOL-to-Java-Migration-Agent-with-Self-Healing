@@ -95,3 +95,46 @@ def test_plain_rounding_mode_error_still_gets_rounding_mode_hint():
     hint = regeneration_hint(error)
     assert "truncates toward zero" in hint
     assert "divide" not in hint.lower()
+
+
+# --- Bug D (found 2026-08-23, fixtures/cobol/multiprog/leaf_a.cob's
+# overflow-truncation candidate): static_reject's "reference outside
+# supplied context" check flagged a locally-declared variable's own method
+# call (e.g. `java.math.BigInteger scaledValue = ...; scaledValue.remainder(m)`)
+# as if `scaledValue` were an unknown external identifier -- it only ever
+# whitelisted the paragraph's external inputs, never anything the
+# candidate body declares and assigns for itself. ---
+
+def test_a_locally_declared_variables_method_call_is_allowed():
+    body = _body(
+        "java.math.BigInteger scaledValue = result.movePointRight(2).toBigIntegerExact();\n"
+        "java.math.BigInteger truncated = scaledValue.remainder(modulus);\n"
+        "return new java.math.BigDecimal(truncated);"
+    )
+    static_reject(body, {"result", "modulus"})  # must not raise: scaledValue/truncated are locally assigned
+
+
+def test_an_identifier_never_assigned_is_still_rejected():
+    body = _body("return unknownHelper.compute(ar);")
+    try:
+        static_reject(body, ALLOWED)
+    except ValidationError as e:
+        assert e.reason == "reference outside supplied context"
+    else:
+        raise AssertionError("expected ValidationError")
+
+
+def test_comparison_operators_do_not_count_as_local_assignment():
+    """`x <= 5` / `x != 5` / `x == 5` must not be mistaken for `x = 5` --
+    only a real assignment marks an identifier as locally declared."""
+    body = _body(
+        "if (count <= 5) { }\n"
+        "return unknownHelper.compute(ar);"
+    )
+    try:
+        static_reject(body, ALLOWED | {"count"})
+    except ValidationError as e:
+        assert e.reason == "reference outside supplied context"
+        assert e.detail == "unknownHelper.compute"
+    else:
+        raise AssertionError("expected ValidationError for unknownHelper, comparison should not mask it")
