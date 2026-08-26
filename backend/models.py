@@ -31,6 +31,30 @@ class CreateRunRequest(BaseModel):
     model_digest: str = ""
     max_repair_attempts: int = DEFAULT_MAX_REPAIRS
     replay: bool = False
+    # 2026-08-26: the same opt-in RunSpec switches weaver/cli.py's `migrate`
+    # subcommand has exposed since (respectively) 2026-08-07 and 2026-08-26
+    # -- until now, only reachable from the CLI, never from a backend-
+    # launched run (see _build_run_spec's docstring in backend/runs.py).
+    # All four default False/unchanged, so an existing caller that never
+    # sets them gets byte-identical behavior to before this field existed.
+    use_text_refinement: bool = False
+    use_delta_debugging: bool = False
+    use_batch_synthesis: bool = False
+    redefines_as_subclasses: bool = False
+    # Multi-program (leaf-first DAG) runs, added 2026-08-26 -- mirrors
+    # `weaver migrate --leaf-first` (weaver/cli.py). When True,
+    # `cobol_source` is reinterpreted as a DIRECTORY of *.cob files
+    # (RunManager.create_run validates this) and RunManager dispatches to
+    # weaver.agent.leaf_orchestrator.LeafOrchestrator instead of the
+    # single-program Orchestrator. False by default -- an existing
+    # single-program request is completely unaffected. DAG-level resume
+    # (RunManager.resume_run) and escalation decisions
+    # (POST .../programs/{program}/escalations/{unit}/decision) are both
+    # implemented for a leaf-first run (docs/specs/BACKEND_PLAN.md Step
+    # B10) -- memory write-back on an accepted escalation is the one
+    # remaining disclosed gap (CLAUDE.md rule 12), not resume/escalation
+    # themselves.
+    leaf_first: bool = False
 
 
 class CreateRunResponse(BaseModel):
@@ -46,6 +70,11 @@ class CreateRunResponse(BaseModel):
     model_digest: str
     max_repair_attempts: int
     replay: bool
+    use_text_refinement: bool
+    use_delta_debugging: bool
+    use_batch_synthesis: bool
+    redefines_as_subclasses: bool
+    leaf_first: bool
 
 
 class UnitStateResponse(BaseModel):

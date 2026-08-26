@@ -13,6 +13,7 @@ are reused unchanged.
 
 from __future__ import annotations
 
+from weaver.cobol.mock_directives import MockDirective
 from weaver.cobol.naming import java_field_name, java_method_name
 from weaver.cobol.subprogram import SubprogramModel
 
@@ -23,8 +24,11 @@ def java_signature(model: SubprogramModel) -> str:
     return f"static java.math.BigDecimal {method_name}(java.math.BigDecimal {input_name})"
 
 
-def allowed_identifiers(model: SubprogramModel) -> set[str]:
-    return {java_field_name(model.input_param.name)}
+def allowed_identifiers(model: SubprogramModel, mock_directives: list[MockDirective] | None = None) -> set[str]:
+    base = {java_field_name(model.input_param.name)}
+    if mock_directives:
+        base.add("WeaverMockRuntime")
+    return base
 
 
 def _overflow_truncation_rule(model: SubprogramModel, next_rule_number: int) -> str:
@@ -67,10 +71,41 @@ def _overflow_truncation_rule(model: SubprogramModel, next_rule_number: int) -> 
    will diverge on large witnesses."""
 
 
-def build_subprogram_prompt(model: SubprogramModel) -> str:
+def _mock_runtime_rule(directives: list[MockDirective], next_rule_number: int) -> str:
+    """This paragraph's EXEC SQL/EXEC CICS blocks (migration-framework-spec.md
+    Section 2.1 Dynamic Mocking) are rewritten out of the oracle's own
+    compiled source before verification (weaver/agent/mock_generator.py) --
+    the offline harness has no database or CICS region to call for real
+    (CLAUDE.md rule 10). The candidate Java body must obtain the same
+    mocked value the oracle sees, via `WeaverMockRuntime.call(signature)`,
+    using exactly the signatures this paragraph's directives resolve to --
+    never a value it invents itself, since that would diverge from the
+    oracle's deterministic mock the instant `weaver/agent/mocked_verify.py`
+    compares terminal state and the External Stub Log axis."""
+    if not directives:
+        return ""
+    plural = "s" if len(directives) != 1 else ""
+    sig_list = ", ".join(f'"{d.signature}"' for d in directives)
+    examples = "\n".join(
+        f'   java.math.BigDecimal v{i} = WeaverMockRuntime.call("{d.signature}");'
+        for i, d in enumerate(directives)
+    )
+    return f"""
+{next_rule_number}. This paragraph makes {len(directives)} external call{plural} (EXEC SQL/EXEC
+   CICS) that this offline harness mocks deterministically. You MUST call
+   `WeaverMockRuntime.call(signature)` once for each, using exactly
+   {"this signature" if len(directives) == 1 else "these signatures"}: {sig_list}.
+   It returns a java.math.BigDecimal already holding the mocked value --
+   do not invent your own value for external data. Example:
+{examples}"""
+
+
+def build_subprogram_prompt(model: SubprogramModel, mock_directives: list[MockDirective] | None = None) -> str:
+    mock_directives = mock_directives or []
     input_name = java_field_name(model.input_param.name)
     signature = java_signature(model)
     overflow_rule = _overflow_truncation_rule(model, next_rule_number=6)
+    mock_rule = _mock_runtime_rule(mock_directives, next_rule_number=7 if overflow_rule else 6)
 
     return f"""\
 You are translating one COBOL subprogram paragraph into a Java method body.
@@ -84,12 +119,12 @@ RULES (absolute, follow exactly):
 3. The only variable available to you is `{input_name}` (a
    java.math.BigDecimal, already holding the paragraph's linkage-section
    input value). Do not reference any other field, class, or static
-   member beyond `{input_name}` and java.math.* types.
+   member beyond `{input_name}` and java.math.* types{" and WeaverMockRuntime" if mock_directives else ""}.
 4. Your method must `return` a java.math.BigDecimal -- the paragraph's
    COBOL linkage-section output value.
 5. Do not include the method signature, braces, or any surrounding
    class/method declaration -- only the statements that go inside the
-   method body.{overflow_rule}
+   method body.{overflow_rule}{mock_rule}
 
 METHOD SIGNATURE (for context only -- do not repeat it in your answer):
 {signature}

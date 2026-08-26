@@ -351,6 +351,100 @@ Execute Part VII. This is the step that makes "validated against the SRS" a true
 
 ---
 
+## Step B10 — Multi-program (leaf-first DAG) dispatch **[Added 2026-08-26]**
+
+This document did not originally anticipate multi-program runs — every
+step above assumes one COBOL program per run. `weaver migrate --leaf-first`
+(migration-framework-spec.md Section 5) predates this step and already
+runs a *directory* of COBOL programs through
+`weaver.agent.leaf_orchestrator.LeafOrchestrator` in DAG leaf-first order;
+this step is the backend's dispatch onto that same, already-correct agent
+machinery — not a new verification mechanism (§1.2's "no requirement in
+more than one place" applies here exactly as everywhere else).
+
+**Design constraint that keeps §1.2 intact.** A multi-program run writes
+a FLAT `orchestrator_state.json`, keyed by a composite `PROGRAM::UNIT` id
+(`weaver.agent.result_view.composite_id`), instead of a nested
+`{program: {unit: ...}}` shape. This means `weaver/agent/metrics.py`'s
+`compute_metrics` — and therefore `weaver report <run_dir>` — needs **no
+multi-program awareness at all**; `len(state)` is still the true unit
+count and `r["status"]` still works per entry. The B5 acceptance test's
+"API metrics are byte-identical to `weaver report`" therefore holds for a
+multi-program run by construction, not by a second implementation.
+
+**Request/response.** `CreateRunRequest.leaf_first: bool = False`
+(`backend/models.py`) — when true, `cobol_source` is a directory, and
+`RunManager.create_run` validates that shape mismatch as a typed 400
+(mirrors `weaver/cli.py`'s own `--leaf-first` directory check).
+`RunManager._run_leaf_first` constructs `LeafOrchestrator` with
+`run_dir=record.run_dir`, so its own combined trace/state land at exactly
+`record.trace_path`/`record.state_path` — the same paths a single-program
+run already uses.
+
+**Endpoints.** `GET /runs/{id}` gains a `programs` field: `null` for an
+ordinary single-program run (no existing client sees a shape change),
+otherwise one row per DAG program. Two new nested routes,
+`GET /runs/{id}/programs/{program}/units/{unit}/code` and
+`.../divergences/{unit}`, exist because a paragraph id like `MAIN-PARA`
+is not unique across programs in a directory — the flat
+`/units/{unit_id}/...` routes are unchanged and still work for a
+single-program run.
+
+**DAG-level resume [Added 2026-08-26].** `LeafOrchestrator.resume_committed:
+dict[str, dict[str, object]] | None` lists, per program, that program's
+already-committed `{unit_id: raw_result}` from a prior interrupted
+attempt; `run()` adopts a listed program without re-running or
+re-verifying it (§4.5's "committed units are not re-verified"), and
+reconstructs `verified_children`/`call_semantics` for a skipped
+subprogram from its real, already-persisted UnitCache — never
+re-derived or fabricated. `RunManager.resume_run` branches on
+`record.request.leaf_first`: for a multi-program run,
+`_reconstruct_committed_programs` regroups the flat
+`orchestrator_state.json` back into `{program: {unit: result}}`, but
+**only for a program where every unit committed** — a program with even
+one escalated/failed unit is re-run from scratch, since
+`LeafOrchestrator` has no per-unit resume within a single program's own
+nested orchestrator, only program granularity. The frontend's Resume
+button is enabled unconditionally.
+
+**Escalation decisions [Added 2026-08-26].**
+`POST /runs/{id}/programs/{program}/escalations/{unit}/decision`
+(`backend/app.py`) — the multi-program analogue of the flat
+`.../escalations/{unit}/decision` route, which stays 400 for a
+`leaf_first` run's unit (a bare `unit_id` is ambiguous across programs).
+`RunManager._decide_escalation_multi_program` re-verifies by the unit's
+real kind (`weaver.agent.result_view.result_kind`): a subprogram unit
+goes through `verify_subprogram` (or `_verify_mocked` for an EXEC
+SQL/CICS subprogram, detected via `find_mock_directives`) over the
+fixed `DEFAULT_SUBPROGRAM_WITNESSES` set — an escalated unit never
+finished a commit, so `_run_subprogram`'s harvest step never ran and
+there is no UnitCache to re-verify against, only a fresh real
+cobc/javac round trip; a file-based unit goes through `verify_unit`
+built against *that program's own* resolved `program_profile`, not
+`base_spec` blindly (the same Phase X7 fix applied one level up). A
+verified decision commits via `dataclasses.replace` into
+`program_results[program][unit_id]` and `LeafOrchestrator._persist_state()`.
+**Still not covered:** memory write-back. `SubprogramUnitResult` carries
+no `DiagnosticRecord` to build a failure-memory signature from, and a
+multi-program file-based unit's diagnostic is dropped at this same
+granularity — a disclosed, narrower scope than the single-program path's
+`_write_back_escalation`. The frontend's decision bar renders for a
+multi-program unit with a note reflecting this.
+
+**Acceptance:** `POST /runs` with `leaf_first=true` against
+`fixtures/cobol/multiprog` (LEAF-A, LEAF-B, ROOT) reaches `COMPLETED`
+with all three units committed and ROOT's report at 0 divergences,
+verified live via a real `cobc`/`javac`/Ollama round trip (not a stand-in
+orchestrator) — same for `fixtures/cobol/mocked_leaf` (BILLING, the
+Dynamic Mocking parity gate) run through the identical dispatch path. DAG
+resume was independently verified live against `fixtures/cobol/multiprog`:
+after a full run, re-running with LEAF-A/LEAF-B pre-marked committed
+reconstructs their `verified_children`/`call_semantics` from disk and
+only ROOT synthesizes fresh (confirmed via real object identity — the
+adopted programs' results are the exact same objects, never re-run).
+
+---
+
 # Part VII — Validation
 
 ## 7.1 Requirement tests

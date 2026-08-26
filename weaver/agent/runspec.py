@@ -119,6 +119,21 @@ class RunSpec:
     # real, currently-compiled oracle output (leaf_orchestrator.py).
     extra_prompt_context: str = ""
 
+    # Phase AA1 (migration-framework-spec.md Section 3.1, "For massive
+    # source code files, the code is recursively split into functional
+    # blocks... utilizing topological call rankings to maintain global
+    # context"): opt-in switch for weaver.agent.batch_synthesize's
+    # hierarchical segment-and-merge synthesis as the FIRST-DRAFT body
+    # source for every unit, one LLM call per topologically-ordered block
+    # instead of per paragraph. The existing per-unit verify/repair loop
+    # (repair_loop.py) is untouched and still runs on each draft exactly
+    # as it would on a single-paragraph synthesis result -- this only
+    # changes where attempt 1's body comes from, never how it is verified
+    # or repaired. False by default: an existing run's synthesis path
+    # (weaver.agent.synthesize.synthesize_paragraph, one call per unit) is
+    # byte-for-byte unaffected unless explicitly opted in.
+    use_batch_synthesis: bool = False
+
     @classmethod
     def default(cls) -> RunSpec:
         return cls()

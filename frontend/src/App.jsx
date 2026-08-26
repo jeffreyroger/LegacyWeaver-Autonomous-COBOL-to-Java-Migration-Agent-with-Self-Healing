@@ -15,10 +15,16 @@ const POLL_MS = 1200
 // "units=['CALCULATE-INTEREST-PARA', 'APPLY-ROUNDING-RULE']" -- the only
 // place the backend exposes the planned unit list ahead of completion
 // (BACKEND_PLAN.md §4.3: events are forwarded verbatim, never reshaped).
-function parsePlannedUnits(outcome) {
+// A multi-program run's own file-based DAG nodes each emit their OWN
+// "plan" event, stamped with a `program`/`composite_id` field by
+// LeafOrchestrator (2026-08-26) -- returned here already
+// composite-id-shaped (PROGRAM::UNIT) so a caller never needs two code
+// paths for the single- vs multi-program case.
+function parsePlannedUnits(outcome, program) {
   const m = String(outcome || '').match(/units=\[(.*)\]/)
   if (!m) return []
-  return [...m[1].matchAll(/'([^']*)'/g)].map((x) => x[1])
+  const ids = [...m[1].matchAll(/'([^']*)'/g)].map((x) => x[1])
+  return program ? ids.map((id) => `${program}::${id}`) : ids
 }
 
 function renderJavaRows(body) {
@@ -30,6 +36,27 @@ function renderJavaRows(body) {
       </span>
     </div>
   ))
+}
+
+// Groups a flat list of composite ids ("PROGRAM::UNIT" or, for a
+// single-program run, a bare unit id with no "::") by program, in first-
+// seen order -- used for the running view's nested tree, where the only
+// composite-id source is the live SSE plan/commit events, not yet the
+// richer runState.programs shape the complete view can read directly.
+function groupCompositeIdsByProgram(ids) {
+  const order = []
+  const byProgram = new Map()
+  for (const id of ids) {
+    const sep = id.indexOf('::')
+    const program = sep === -1 ? null : id.slice(0, sep)
+    const key = program ?? '__single__'
+    if (!byProgram.has(key)) {
+      byProgram.set(key, { program, ids: [] })
+      order.push(key)
+    }
+    byProgram.get(key).ids.push(id)
+  }
+  return order.map((key) => byProgram.get(key))
 }
 
 function renderCobolRows(rows) {
@@ -121,7 +148,17 @@ export default function App() {
           sseOpened = true
           sseRef.current = api.streamRunEvents(runId, (evt) => {
             setTraceEvents((prev) => [...prev.slice(-499), evt])
-            if (evt.node === 'plan') setPlannedUnits(parsePlannedUnits(evt.outcome))
+            if (evt.node === 'plan') {
+              setPlannedUnits((prev) => {
+                const next = parsePlannedUnits(evt.outcome, evt.program)
+                if (!evt.program) return next // single-program: exactly one plan event, replace as before
+                // Multi-program: each DAG node's Orchestrator emits its OWN
+                // plan event -- accumulate across programs instead of the
+                // last one overwriting every earlier program's units.
+                const others = prev.filter((id) => !id.startsWith(`${evt.program}::`))
+                return [...others, ...next]
+              })
+            }
           })
         }
       }).catch(() => {})
@@ -171,17 +208,27 @@ export default function App() {
 
   // ---- unit selection: fetch code + divergences on demand ----
   const units = runState?.units || []
+  const isMultiProgram = runState?.programs != null
   useEffect(() => {
     if (!selectedUnitId || !currentRunId) return
-    const unit = units.find((u) => u.unit_id === selectedUnitId)
+    const unit = units.find((u) => u.composite_id === selectedUnitId)
     if (!unit) return
+    // A multi-program unit is reached via the nested /programs/{program}/
+    // routes (a paragraph id is not unique across programs); a
+    // single-program unit keeps using the flat routes exactly as before.
+    const fetchCode = unit.program
+      ? api.getUnitCodeInProgram(currentRunId, unit.program, unit.unit_id)
+      : api.getUnitCode(currentRunId, unit.unit_id)
+    const fetchDivergence = unit.program
+      ? api.getDivergencesInProgram(currentRunId, unit.program, unit.unit_id)
+      : api.getDivergences(currentRunId, unit.unit_id)
     if (!unitCodeCache[selectedUnitId]) {
-      api.getUnitCode(currentRunId, selectedUnitId)
+      fetchCode
         .then((code) => setUnitCodeCache((c) => ({ ...c, [selectedUnitId]: code })))
         .catch((e) => setUnitCodeCache((c) => ({ ...c, [selectedUnitId]: { error: e.message } })))
     }
     if (divergenceCache[selectedUnitId] === undefined) {
-      api.getDivergences(currentRunId, selectedUnitId)
+      fetchDivergence
         .then((rep) => setDivergenceCache((c) => ({ ...c, [selectedUnitId]: rep })))
         .catch(() => setDivergenceCache((c) => ({ ...c, [selectedUnitId]: null })))
     }
@@ -192,13 +239,18 @@ export default function App() {
   useEffect(() => {
     if (selectedUnitId || units.length === 0) return
     const escalated = units.find((u) => u.status === 'escalated')
-    setSelectedUnitId((escalated || units[units.length - 1]).unit_id)
+    setSelectedUnitId((escalated || units[units.length - 1]).composite_id)
   }, [units, selectedUnitId])
 
   function decide(decision, body) {
     if (!currentRunId || !selectedUnitId) return
+    const unit = units.find((u) => u.composite_id === selectedUnitId)
+    if (!unit) return
     setDecisionBusy(true)
-    api.postEscalationDecision(currentRunId, selectedUnitId, decision, body)
+    const request = unit.program
+      ? api.postEscalationDecisionInProgram(currentRunId, unit.program, unit.unit_id, decision, body)
+      : api.postEscalationDecision(currentRunId, unit.unit_id, decision, body)
+    request
       .then(() => api.getRun(currentRunId))
       .then((rs) => { setRunState(rs); setDecisionBusy(false) })
       .catch((e) => { setFormError(e.message); setDecisionBusy(false) })
@@ -212,18 +264,41 @@ export default function App() {
   const BAR_COUNT = 32
   const barsOn = Math.round((pct / 100) * BAR_COUNT)
 
-  function unitRowStatus(unitId) {
-    const done = units.find((u) => u.unit_id === unitId)
+  function unitRowStatus(compositeId) {
+    const done = units.find((u) => u.composite_id === compositeId)
     if (done) return done.status // committed | escalated
-    const lastEvt = [...traceEvents].reverse().find((e) => e.unit === unitId)
+    // A single-program run's own Orchestrator events have no
+    // composite_id (only LeafOrchestrator's wrapper stamps one) -- fall
+    // back to the bare `unit` field, which equals the composite id in
+    // that case anyway (weaver.agent.result_view.composite_id(None, u)).
+    const lastEvt = [...traceEvents].reverse().find((e) => (e.composite_id || e.unit) === compositeId)
     if (lastEvt) return `${lastEvt.node}…`
     return 'queued'
   }
 
-  const selectedUnit = units.find((u) => u.unit_id === selectedUnitId)
+  const selectedUnit = units.find((u) => u.composite_id === selectedUnitId)
   const selectedCode = selectedUnitId ? unitCodeCache[selectedUnitId] : null
   const selectedDivergence = selectedUnitId ? divergenceCache[selectedUnitId] : null
-  const unitTrace = selectedUnitId ? traceEvents.filter((e) => e.unit === selectedUnitId) : []
+  // A subprogram unit's divergence report (weaver.agent.result_view.
+  // normalize_divergence_report, kind: "subprogram") has no `verified`/
+  // `total_records` field at all -- it is compiled + a divergence_count
+  // over witnesses instead of report lines. Derived here rather than
+  // adding a second component-local reimplementation of "verified".
+  const divergenceVerified = selectedDivergence
+    ? (selectedDivergence.kind === 'subprogram'
+        ? selectedDivergence.compiled && selectedDivergence.divergence_count === 0
+        : selectedDivergence.verified)
+    : false
+  const divergenceSummaryText = !selectedDivergence
+    ? 'No divergence report available for this unit.'
+    : selectedDivergence.kind === 'subprogram'
+      ? (selectedDivergence.compiled
+          ? `${selectedDivergence.divergence_count} divergence(s) over the witness set`
+          : 'Did not compile')
+      : `${selectedDivergence.total_records - selectedDivergence.divergence_count} / ${selectedDivergence.total_records} report lines byte-identical to oracle`
+  const unitTrace = selectedUnitId
+    ? traceEvents.filter((e) => (e.composite_id || e.unit) === selectedUnitId)
+    : []
 
   const activeRunListItem = runs.find((r) => r.run_id === currentRunId)
 
@@ -321,17 +396,34 @@ export default function App() {
                       {plannedUnits.length === 0 && units.length === 0 && (
                         <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>Waiting for the plan step…</div>
                       )}
-                      {(plannedUnits.length ? plannedUnits : units.map((u) => u.unit_id)).map((unitId) => {
-                        const status = unitRowStatus(unitId)
-                        const done = status === 'committed' || status === 'escalated'
-                        return (
-                          <div key={unitId} className={'unit-row' + (done ? ' done' : '')} onClick={() => setSelectedUnitId(unitId)}>
-                            <span className="unit-ico">{done ? <CheckIcon width={15} height={15} /> : status === 'queued' ? <span className="pending" /> : <span className="spinner" />}</span>
-                            <span className="unit-name">{unitId}</span>
-                            <span className="unit-status">{status}</span>
-                          </div>
-                        )
-                      })}
+                      {groupCompositeIdsByProgram(
+                        plannedUnits.length ? plannedUnits : units.map((u) => u.composite_id)
+                      ).map((group) => (
+                        <div key={group.program ?? '__single__'} className="unit-group">
+                          {group.program && (
+                            <div className="unit-group-header">
+                              <span className="unit-group-name">{group.program}</span>
+                            </div>
+                          )}
+                          {group.ids.map((compositeId) => {
+                            const status = unitRowStatus(compositeId)
+                            const done = status === 'committed' || status === 'escalated'
+                            const unit = units.find((u) => u.composite_id === compositeId)
+                            const label = unit ? unit.unit_id : compositeId.split('::').pop()
+                            return (
+                              <div
+                                key={compositeId}
+                                className={'unit-row' + (done ? ' done' : '') + (group.program ? ' unit-row-nested' : '')}
+                                onClick={() => setSelectedUnitId(compositeId)}
+                              >
+                                <span className="unit-ico">{done ? <CheckIcon width={15} height={15} /> : status === 'queued' ? <span className="pending" /> : <span className="spinner" />}</span>
+                                <span className="unit-name">{label}</span>
+                                <span className="unit-status">{status}</span>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      ))}
                     </div>
                   </div>
                 </div>
@@ -352,13 +444,33 @@ export default function App() {
 
                   {units.length > 1 && (
                     <div className="unit-list" style={{ padding: '10px 14px', borderBottom: '1px solid var(--line)' }}>
-                      {units.map((u) => (
-                        <div key={u.unit_id} className={'unit-row' + (u.unit_id === selectedUnitId ? ' selected' : '')} onClick={() => setSelectedUnitId(u.unit_id)}>
-                          <span className="unit-ico">{u.status === 'committed' ? <CheckIcon width={15} height={15} /> : <span className="pending" />}</span>
-                          <span className="unit-name">{u.unit_id}</span>
-                          <span className="unit-status">{u.status}</span>
-                        </div>
-                      ))}
+                      {isMultiProgram
+                        ? runState.programs.map((group) => (
+                            <div key={group.program} className="unit-group">
+                              <div className="unit-group-header">
+                                <span className="unit-group-name">{group.program}</span>
+                                <span className="unit-group-progress">{group.committed_count}/{group.unit_count}</span>
+                              </div>
+                              {group.units.map((u) => (
+                                <div
+                                  key={u.composite_id}
+                                  className={'unit-row unit-row-nested' + (u.composite_id === selectedUnitId ? ' selected' : '')}
+                                  onClick={() => setSelectedUnitId(u.composite_id)}
+                                >
+                                  <span className="unit-ico">{u.status === 'committed' ? <CheckIcon width={15} height={15} /> : <span className="pending" />}</span>
+                                  <span className="unit-name">{u.unit_id}</span>
+                                  <span className="unit-status">{u.status}</span>
+                                </div>
+                              ))}
+                            </div>
+                          ))
+                        : units.map((u) => (
+                            <div key={u.composite_id} className={'unit-row' + (u.composite_id === selectedUnitId ? ' selected' : '')} onClick={() => setSelectedUnitId(u.composite_id)}>
+                              <span className="unit-ico">{u.status === 'committed' ? <CheckIcon width={15} height={15} /> : <span className="pending" />}</span>
+                              <span className="unit-name">{u.unit_id}</span>
+                              <span className="unit-status">{u.status}</span>
+                            </div>
+                          ))}
                     </div>
                   )}
 
@@ -379,14 +491,10 @@ export default function App() {
                             {selectedCode?.java && !selectedCode.java.available && <div style={{ padding: 14, fontSize: 12, color: 'var(--ink-3)' }}>No committed body for this unit.</div>}
                           </div>
                         </div>
-                        <div className={'receipt ' + (selectedDivergence?.verified ? 'ok' : selectedDivergence ? 'bad' : '')}>
-                          {selectedDivergence?.verified ? <ShieldIcon /> : <ShieldWarnIcon />}
+                        <div className={'receipt ' + (divergenceVerified ? 'ok' : selectedDivergence ? 'bad' : '')}>
+                          {divergenceVerified ? <ShieldIcon /> : <ShieldWarnIcon />}
                           <div className="receipt-main">
-                            <div className="receipt-line">
-                              {selectedDivergence
-                                ? `${selectedDivergence.total_records - selectedDivergence.divergence_count} / ${selectedDivergence.total_records} report lines byte-identical to oracle`
-                                : 'No divergence report available for this unit.'}
-                            </div>
+                            <div className="receipt-line">{divergenceSummaryText}</div>
                           </div>
                         </div>
                         {selectedDivergence && <div style={{ padding: 12 }}><DivergenceTable report={selectedDivergence} /></div>}
@@ -501,7 +609,11 @@ export default function App() {
 
                   {selectedUnit?.status === 'escalated' && (
                     <div className="decision-bar" style={{ display: 'flex' }}>
-                      <span className="decision-note">Accepting re-verifies against the oracle before committing and stores the repair in failure memory.</span>
+                      <span className="decision-note">
+                        {isMultiProgram
+                          ? 'Accepting re-verifies against the oracle before committing (no failure-memory write-back for a multi-program unit yet).'
+                          : 'Accepting re-verifies against the oracle before committing and stores the repair in failure memory.'}
+                      </span>
                       <button className="btn-sm ghost" disabled={decisionBusy} onClick={() => decide('reject')}>Reject</button>
                       <button className="btn-sm solid" disabled={decisionBusy} onClick={() => decide('accept')}>Accept repair</button>
                     </div>

@@ -72,13 +72,21 @@ def _target_field(directive: MockDirective) -> str | None:
     return match.group(1).upper() if match else None
 
 
-def _replacement_statement(directive: MockDirective, mock_map: MockMap) -> str:
+def _replacement_statements(directive: MockDirective, mock_map: MockMap) -> list[str]:
+    """Returns the replacement as SEPARATE statements, one per physical
+    line -- fixed-format COBOL's column 72 line-length limit (GnuCOBOL's
+    default) silently truncates a long MOVE+DISPLAY combined onto one
+    line, which for a longer signature cuts a string literal mid-quote
+    and fails to compile with a baffling 'continuation character
+    expected' error one line further down. Never combine them again."""
     value = mock_map[directive.signature]
     target = _target_field(directive)
     literal = value.literal if value.kind == "numeric" else f'"{value.literal}"'
-    move = f"MOVE {literal} TO {target}" if target else ""
-    display = f'DISPLAY "STUB:{directive.signature}"'
-    return f"{move}. {display}" if move else display
+    statements = []
+    if target:
+        statements.append(f"MOVE {literal} TO {target}.")
+    statements.append(f'DISPLAY "STUB:{directive.signature}".')
+    return statements
 
 
 def rewrite_cobol_source(source: str, directives: list[MockDirective], mock_map: MockMap,
@@ -108,7 +116,8 @@ def rewrite_cobol_source(source: str, directives: list[MockDirective], mock_map:
                 i += 1
                 block_lines.append(lines[i])
             indent = raw[: len(raw) - len(raw.lstrip())]
-            out.append(f"{indent}{_replacement_statement(directive, mock_map)}.\n")
+            for stmt in _replacement_statements(directive, mock_map):
+                out.append(f"{indent}{stmt}\n")
             i += 1
             continue
 

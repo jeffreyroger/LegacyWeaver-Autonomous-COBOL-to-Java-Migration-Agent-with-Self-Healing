@@ -429,6 +429,12 @@ def test_bind_refusal_for_non_loopback_host():
 
 def test_toolchain_reports_not_found_when_cobc_absent(monkeypatch):
     monkeypatch.setattr(app_module.shutil, "which", lambda name: None)
+    # Hermetic regardless of the host machine's own environment: this dev
+    # box legitimately sets WEAVER_COBC_VIA_WSL=1 (CLAUDE.md rule 10), which
+    # would otherwise make _check_toolchain take the real WSL branch here
+    # and this "no toolchain at all" test would depend on whether WSL/cobc
+    # actually happen to be installed on whoever runs the suite.
+    monkeypatch.delenv("WEAVER_COBC_VIA_WSL", raising=False)
     available, detail = _real_check_toolchain()
     assert available is False
     assert detail == "gnucobol_not_found"

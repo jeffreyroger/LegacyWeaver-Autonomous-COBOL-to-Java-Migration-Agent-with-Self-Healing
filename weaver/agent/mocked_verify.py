@@ -159,7 +159,17 @@ public final class Driver {{
     )
     candidate_stdout_lines = candidate_proc.stdout.splitlines()
     candidate_raw = candidate_stdout_lines[-1].strip() if candidate_stdout_lines else ""
-    candidate_output = _from_raw(candidate_raw, out_scale) if candidate_raw else None
+    try:
+        candidate_output = _from_raw(candidate_raw, out_scale) if candidate_raw else None
+    except (ValueError, ArithmeticError):
+        # A candidate that crashes at runtime (e.g. a non-terminating
+        # BigDecimal conversion) or never reaches its final println leaves
+        # a non-numeric trace line (PARA:.../STUB:...) as the last line of
+        # stdout, not a raw output value -- that is a real verification
+        # failure (compiled clean, wrong/no answer), not a harness bug, so
+        # record it as a mismatch instead of crashing the orchestrator.
+        candidate_output = None
+        candidate_raw = f"<non-numeric or crashed: {candidate_raw!r}>"
 
     return MockedVerifyResult(
         compiled=True,

@@ -40,6 +40,18 @@ export function getUnitCode(runId, unitId) {
   return fetch(`/runs/${runId}/units/${encodeURIComponent(unitId)}/code`).then(asJson)
 }
 
+// Multi-program (leaf-first DAG) runs, 2026-08-26 -- a paragraph id like
+// MAIN-PARA is not unique across programs in a directory run, so these
+// take a nested path segment instead of overloading unitId with a
+// composite string (backend/app.py's /programs/{program}/... routes).
+export function getUnitCodeInProgram(runId, program, unitId) {
+  return fetch(`/runs/${runId}/programs/${encodeURIComponent(program)}/units/${encodeURIComponent(unitId)}/code`).then(asJson)
+}
+
+export function getDivergencesInProgram(runId, program, unitId) {
+  return fetch(`/runs/${runId}/programs/${encodeURIComponent(program)}/divergences/${encodeURIComponent(unitId)}`).then(asJson)
+}
+
 export function getDivergences(runId, unitId) {
   return fetch(`/runs/${runId}/divergences/${encodeURIComponent(unitId)}`).then(asJson)
 }
@@ -54,6 +66,15 @@ export function resumeRun(runId) {
 
 export function postEscalationDecision(runId, unitId, decision, body) {
   return fetch(`/runs/${runId}/escalations/${encodeURIComponent(unitId)}/decision`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ decision, body: body ?? null }),
+  }).then(asJson)
+}
+
+// Multi-program (leaf-first DAG) escalation decisions, 2026-08-26.
+export function postEscalationDecisionInProgram(runId, program, unitId, decision, body) {
+  return fetch(`/runs/${runId}/programs/${encodeURIComponent(program)}/escalations/${encodeURIComponent(unitId)}/decision`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ decision, body: body ?? null }),

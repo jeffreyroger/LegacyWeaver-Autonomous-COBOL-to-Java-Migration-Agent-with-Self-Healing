@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
@@ -28,9 +29,37 @@ from weaver.agent.inference import InferenceClient, InferenceError, InferenceReq
 from weaver.agent.prompt import SYNTHESIS_SCHEMA
 from weaver.agent.runspec import RunSpec
 from weaver.agent.subprogram_prompt import allowed_identifiers, build_subprogram_prompt
-from weaver.agent.subprogram_verify import SubprogramVerifyResult, verify_subprogram
+from weaver.agent.subprogram_verify import SubprogramDivergence, SubprogramVerifyResult, verify_subprogram
 from weaver.agent.validate import ValidationError, auto_qualify, parse_response, regeneration_hint, static_reject
+from weaver.cobol.mock_directives import find_mock_directives
 from weaver.cobol.subprogram import SubprogramModel, load_subprogram
+
+
+def _verify_mocked(model: SubprogramModel, body: str, witnesses: list[Decimal],
+                    work_dir: Path) -> SubprogramVerifyResult:
+    """Dynamic Mocking / three-axis Parity Gate (migration-framework-spec.md
+    Section 2.1/2.2, Phase Z1's `weaver.agent.mocked_verify`), aggregated
+    over this unit's witness set into the same `SubprogramVerifyResult`
+    shape `verify_subprogram` returns, so the repair loop below needs no
+    branch beyond choosing which verify function to call. A witness fails
+    here if ANY of the three parity axes (terminal state, paragraphs hit,
+    external stub log) diverges -- not terminal state alone -- since a
+    candidate that reaches the right number by skipping the mocked call
+    entirely is exactly the defect this gate exists to catch."""
+    from weaver.agent.mocked_verify import verify_mocked_subprogram
+
+    divergences: list[SubprogramDivergence] = []
+    for i, witness in enumerate(witnesses):
+        result = verify_mocked_subprogram(model, body, witness, work_dir / f"witness-{i}")
+        if not result.compiled:
+            return SubprogramVerifyResult(compiled=False, compile_error=result.compile_error)
+        if not result.all_axes_match:
+            divergences.append(SubprogramDivergence(
+                witness_input=witness,
+                oracle_output=result.oracle_output,
+                candidate_output=result.candidate_output,
+            ))
+    return SubprogramVerifyResult(compiled=True, divergences=tuple(divergences))
 
 TRACE_PATH = Path("generated/subprogram_trace.jsonl")
 WORK_DIR = Path("generated/subprogram_orchestrator")
@@ -55,6 +84,11 @@ class SubprogramOrchestrator:
     trace_path: Path = TRACE_PATH
     work_dir: Path = WORK_DIR
     fresh_trace: bool = True
+    # Backend attachment point, added 2026-08-26 for multi-program runs --
+    # symmetric with weaver.agent.orchestrator.Orchestrator's own on_event
+    # parameter. Optional and None by default: an existing caller (every
+    # test, LeafOrchestrator before this change) is unaffected.
+    on_event: Callable[[dict], None] | None = None
 
     def __post_init__(self) -> None:
         self.trace_path.parent.mkdir(parents=True, exist_ok=True)
@@ -73,12 +107,16 @@ class SubprogramOrchestrator:
         }
         with self.trace_path.open("a") as f:
             f.write(json.dumps(event) + "\n")
+        if self.on_event is not None:
+            self.on_event(event)
 
     def run(self) -> SubprogramUnitResult:
         start = time.monotonic()
         model = load_subprogram(self.cobol_source)
-        base_prompt = build_subprogram_prompt(model)
-        allowed = allowed_identifiers(model)
+        full_source = self.cobol_source.read_text(encoding="utf-8")
+        mock_directives = find_mock_directives(full_source)
+        base_prompt = build_subprogram_prompt(model, mock_directives)
+        allowed = allowed_identifiers(model, mock_directives)
 
         model_calls = 0
         prompt = base_prompt
@@ -113,7 +151,10 @@ class SubprogramOrchestrator:
 
             t0 = time.monotonic()
             verify_dir = self.work_dir / model.program_id / f"attempt-{attempt}"
-            last_verify = verify_subprogram(model, last_body, self.witnesses, verify_dir)
+            if mock_directives:
+                last_verify = _verify_mocked(model, last_body, self.witnesses, verify_dir)
+            else:
+                last_verify = verify_subprogram(model, last_body, self.witnesses, verify_dir)
             if not last_verify.compiled:
                 self._emit("verify", "subprogram_verify", time.monotonic() - t0,
                             outcome=f"compile_error: {last_verify.compile_error}")
@@ -133,9 +174,25 @@ class SubprogramOrchestrator:
                 f"input={d.witness_input} expected_output={d.oracle_output} your_output={d.candidate_output}"
                 for d in last_verify.divergences[:3]
             )
-            prompt = (f"{base_prompt}\n\nYour previous answer compiled but diverged from the real "
-                      f"COBOL subprogram's actual output on these witness inputs: {divergence_note}. "
-                      "Fix the logic so every witness matches exactly.")
+            if mock_directives:
+                # A mocked EXEC SQL/CICS call's output is a fixed canned
+                # value, constant across every witness (weaver/agent/
+                # mock_generator.py's default_mock_map derives one value
+                # per signature, not per input) -- found live 2026-08-26:
+                # showing raw (input, expected_output) pairs alone made the
+                # model curve-fit a spurious input-dependent formula through
+                # what is actually a constant, instead of recognizing it
+                # must call the mock. State that explicitly.
+                prompt = (f"{base_prompt}\n\nYour previous answer compiled but diverged: "
+                          f"{divergence_note}. This value is NOT computed from the input -- "
+                          "it is an external mocked call's return value, which is why it looks "
+                          "the same (or nearly the same) across different inputs. Do not try to "
+                          "fit a formula to it. Call WeaverMockRuntime.call(signature) with the "
+                          "exact signature given above and return its result directly.")
+            else:
+                prompt = (f"{base_prompt}\n\nYour previous answer compiled but diverged from the real "
+                          f"COBOL subprogram's actual output on these witness inputs: {divergence_note}. "
+                          "Fix the logic so every witness matches exactly.")
 
         duration = time.monotonic() - start
         reason = ("no compiling/validated body produced" if last_verify is None

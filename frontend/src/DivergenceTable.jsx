@@ -1,8 +1,50 @@
-// Renders a Report's divergence list verbatim (weaver/report.py Report.to_json()).
-// No comparison or classification logic here -- every value is already
-// decided by the oracle harness before it reaches this component.
+// Renders a Report's divergence list verbatim (weaver/report.py Report.to_json(),
+// via weaver.agent.result_view.normalize_divergence_report). No comparison or
+// classification logic here -- every value is already decided by the oracle
+// harness before it reaches this component.
+//
+// A subprogram unit (2026-08-26, multi-program/leaf-first runs) has no
+// record/field/offset concept at all -- its divergences are witness
+// input/output triples (weaver.agent.subprogram_verify.SubprogramDivergence).
+// Rendered with its own columns instead of forced into the record-index
+// shape it has no values for, which would mean inventing data.
+function SubprogramDivergenceTable({ report }) {
+  const rows = report.divergences || []
+  return (
+    <div className="dv-wrap">
+      <div className="dv-cap">
+        <span className="cell-title">Divergences · witness inputs vs oracle</span>
+        <span className="dv-count">{report.divergence_count}</span>
+      </div>
+      {!report.compiled && (
+        <div className="dv-more">Did not compile: {report.compile_error}</div>
+      )}
+      {report.compiled && (
+        <div className="dv-scroll">
+          <div className="dv-table" style={{ gridTemplateColumns: 'max-content 1fr 1fr' }}>
+            <div className="dv-h">Witness input</div>
+            <div className="dv-h">Expected (oracle)</div>
+            <div className="dv-h">Actual</div>
+            {rows.map((d, i) => (
+              <div key={i} className="dv-row" style={{ display: 'contents' }}>
+                <div className="dv-c">{d.witness_input}</div>
+                <div className="dv-c">{d.oracle_output}</div>
+                <div className="dv-c">{d.candidate_output}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {report.compiled && rows.length === 0 && (
+        <div className="dv-more">0 divergences</div>
+      )}
+    </div>
+  )
+}
+
 export default function DivergenceTable({ report }) {
   if (!report) return null
+  if (report.kind === 'subprogram') return <SubprogramDivergenceTable report={report} />
   const rows = report.divergences || []
   const shown = rows.length
   const extra = Math.max(0, (report.divergence_count || 0) - shown)

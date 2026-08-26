@@ -196,6 +196,17 @@ harness, not as a replacement for it.
     same reuse extended to the harness's primary entry point rather than a
     new mechanism.
 
+    **Extended 2026-08-26 to `backend/app.py`'s toolchain health check:**
+    `_check_toolchain` (used by `GET /health` and to gate `POST /runs`)
+    gained the identical opt-in WSL branch (`_check_toolchain_via_wsl`,
+    same env var, same native-`cobc`-absent gate) — without it, a
+    backend-launched run on this Windows dev machine was refused at the
+    toolchain gate before ever reaching the orchestrator, even though
+    `weaver verify`/`weaver migrate` already worked end-to-end via the
+    2026-08-23 exception above. Same reuse of the existing pattern, not a
+    new mechanism; found blocking a real end-to-end backend verification
+    of the multi-program (leaf-first) dispatch work below.
+
     **Scoped live-connector exception (2026-08-20, migration-framework-spec.md
     Section 4.2, Phase Z2):** `tests/test_connectors_live.py` may start local
     Docker containers (`postgres`, `rabbitmq`) and make real network calls to

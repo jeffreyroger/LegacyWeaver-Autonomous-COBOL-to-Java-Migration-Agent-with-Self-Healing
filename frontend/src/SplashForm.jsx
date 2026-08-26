@@ -10,6 +10,11 @@ const DEFAULTS = {
   replay: false,
   synthesisMode: true,
   candidatePath: '',
+  useTextRefinement: false,
+  useDeltaDebugging: false,
+  useBatchSynthesis: false,
+  redefinesAsSubclasses: false,
+  leafFirst: false,
 }
 
 // Advisory only, not authoritative -- the backend's real per-program
@@ -43,7 +48,12 @@ export default function SplashForm({ health, onStart, starting, error }) {
     })
   }
 
-  const mismatch = KNOWN_PAIRS[f.cobolSource.trim()] && KNOWN_PAIRS[f.cobolSource.trim()] !== f.dataFile.trim()
+  // KNOWN_PAIRS is single-program advice (a COBOL file paired with its
+  // one data file) -- meaningless once cobolSource names a DIRECTORY of
+  // programs (leaf-first), so the mismatch hint is suppressed rather than
+  // comparing a directory path against a single-file pairing table.
+  const mismatch = !f.leafFirst
+    && KNOWN_PAIRS[f.cobolSource.trim()] && KNOWN_PAIRS[f.cobolSource.trim()] !== f.dataFile.trim()
 
   function submit() {
     onStart({
@@ -57,6 +67,11 @@ export default function SplashForm({ health, onStart, starting, error }) {
       model_digest: '',
       max_repair_attempts: Number(f.maxRepairs),
       replay: f.replay,
+      use_text_refinement: f.useTextRefinement,
+      use_delta_debugging: f.useDeltaDebugging,
+      use_batch_synthesis: f.useBatchSynthesis,
+      redefines_as_subclasses: f.redefinesAsSubclasses,
+      leaf_first: f.leafFirst,
     })
   }
 
@@ -90,8 +105,16 @@ export default function SplashForm({ health, onStart, starting, error }) {
 
         <div className="upload-card">
           <div className="field-row">
-            <label className="field-label" htmlFor="fCobolSource">COBOL source path *</label>
-            <input className="field-input mono" id="fCobolSource" type="text" value={f.cobolSource} onChange={set('cobolSource')} />
+            <label className="field-label" htmlFor="fLeafFirst">
+              <input type="checkbox" id="fLeafFirst" checked={f.leafFirst} onChange={set('leafFirst')} /> Leaf-first (directory of programs)
+            </label>
+          </div>
+          <div className="field-row">
+            <label className="field-label" htmlFor="fCobolSource">
+              {f.leafFirst ? 'COBOL directory path *' : 'COBOL source path *'}
+            </label>
+            <input className="field-input mono" id="fCobolSource" type="text" value={f.cobolSource} onChange={set('cobolSource')}
+                   placeholder={f.leafFirst ? 'fixtures/cobol/multiprog' : undefined} />
           </div>
           <div className="field-row">
             <label className="field-label" htmlFor="fCopybookDir">Copybook directory (optional)</label>
@@ -140,6 +163,26 @@ export default function SplashForm({ health, onStart, starting, error }) {
                   <input className="field-input mono" id="fCandidatePath" type="text" value={f.candidatePath} onChange={set('candidatePath')} placeholder="path to a Java method body file" />
                 </div>
               )}
+              <div className="field-row">
+                <label className="field-label" htmlFor="fUseTextRefinement">
+                  <input type="checkbox" id="fUseTextRefinement" checked={f.useTextRefinement} onChange={set('useTextRefinement')} /> Text refinement (hosted gpt-4o-mini pass, requires OPENAI_API_KEY on the backend host)
+                </label>
+              </div>
+              <div className="field-row">
+                <label className="field-label" htmlFor="fUseDeltaDebugging">
+                  <input type="checkbox" id="fUseDeltaDebugging" checked={f.useDeltaDebugging} onChange={set('useDeltaDebugging')} /> Delta debugging (minimal-counterexample repair prompts)
+                </label>
+              </div>
+              <div className="field-row">
+                <label className="field-label" htmlFor="fUseBatchSynthesis">
+                  <input type="checkbox" id="fUseBatchSynthesis" checked={f.useBatchSynthesis} onChange={set('useBatchSynthesis')} /> Hierarchical batch synthesis (one LLM call per block instead of per paragraph)
+                </label>
+              </div>
+              <div className="field-row">
+                <label className="field-label" htmlFor="fRedefinesAsSubclasses">
+                  <input type="checkbox" id="fRedefinesAsSubclasses" checked={f.redefinesAsSubclasses} onChange={set('redefinesAsSubclasses')} /> REDEFINES overlays as subclasses (instead of flattened accessors)
+                </label>
+              </div>
             </div>
           </details>
         </div>

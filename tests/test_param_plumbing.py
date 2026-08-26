@@ -171,6 +171,28 @@ def test_migrate_cli_threads_use_text_refinement_and_delta_debugging():
     assert spec_off.use_delta_debugging is False
 
 
+def test_migrate_cli_threads_redefines_as_subclasses():
+    """ScaffoldSpec.redefines_as_subclasses (weaver/agent/scaffold.py,
+    Task 5, FR-12.1-12.3) was reachable only from its own unit test
+    (tests/test_scaffold_redefines.py) before --redefines-as-subclasses
+    existed -- no CLI flag or program profile ever set it True, so the
+    subclass-overlay code path was permanently dead from `weaver migrate`.
+    Opt-in only: interest.cob's default run must keep the flag False,
+    unchanged, since its pinned golden output depends on the flattened-
+    accessor path (tests/test_scaffold_redefines.py's own guarantee)."""
+    from weaver.cli import build_parser, build_migrate_spec
+
+    parser = build_parser()
+
+    args_on = parser.parse_args([
+        "migrate", "fixtures/cobol/interest.cob", "--redefines-as-subclasses",
+    ])
+    assert build_migrate_spec(args_on).scaffold_spec.redefines_as_subclasses is True
+
+    args_off = parser.parse_args(["migrate", "fixtures/cobol/interest.cob"])
+    assert build_migrate_spec(args_off).scaffold_spec.redefines_as_subclasses is False
+
+
 def test_verify_candidate_uses_injected_input_data(tmp_path, monkeypatch):
     from weaver.agent import verify as verify_mod
 

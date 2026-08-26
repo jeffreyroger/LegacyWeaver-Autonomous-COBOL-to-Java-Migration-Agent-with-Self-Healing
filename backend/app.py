@@ -9,8 +9,8 @@ tests/test_backend_import_direction.py).
 
 from __future__ import annotations
 
-import dataclasses
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -65,13 +65,43 @@ def _gnucobol_major_version(cobc_path: str) -> int | None:
 def _check_toolchain() -> tuple[bool, str]:
     """Returns (available, detail). `detail` distinguishes "not installed"
     from "installed but the wrong major version" (SRS §2.4 / OI-3) rather
-    than collapsing both into an unexplained bool."""
+    than collapsing both into an unexplained bool.
+
+    Scoped WSL delegation exception (CLAUDE.md rule 10, 2026-08-26): when
+    no native `cobc` is on PATH and `WEAVER_COBC_VIA_WSL=1`, the version
+    check runs via `wsl -e bash -lc "cobc --version"` instead -- the same
+    gate `weaver/cli.py`'s `_compile_oracle` and `weaver/execution.py`'s
+    `run_oracle` already use, extended here so a backend-launched run on
+    this Windows dev machine isn't refused at the toolchain gate before
+    ever reaching the orchestrator. A machine with native cobc (every CI
+    runner) never touches this branch regardless of the env var."""
     cobc_path = shutil.which("cobc")
+    if cobc_path is None and os.environ.get("WEAVER_COBC_VIA_WSL") == "1":
+        return _check_toolchain_via_wsl()
     if cobc_path is None:
         return False, "gnucobol_not_found"
     if shutil.which("javac") is None:
         return False, "javac_not_found"
     major = _gnucobol_major_version(cobc_path)
+    if major is None:
+        return False, "gnucobol_version_undetermined"
+    if major < MIN_GNUCOBOL_MAJOR:
+        return False, f"gnucobol_version_unsupported:{major}.x (requires {MIN_GNUCOBOL_MAJOR}.x, SRS §2.4)"
+    return True, "ok"
+
+
+def _check_toolchain_via_wsl() -> tuple[bool, str]:
+    if shutil.which("javac") is None:
+        return False, "javac_not_found"
+    try:
+        proc = subprocess.run(["wsl", "-e", "bash", "-lc", "cobc --version"],
+                               capture_output=True, text=True, timeout=10)
+    except Exception:
+        return False, "gnucobol_not_found"
+    if proc.returncode != 0:
+        return False, "gnucobol_not_found"
+    match = _GNUCOBOL_VERSION_RE.search(proc.stdout or proc.stderr or "")
+    major = int(match.group(1)) if match else None
     if major is None:
         return False, "gnucobol_version_undetermined"
     if major < MIN_GNUCOBOL_MAJOR:
@@ -142,24 +172,37 @@ def get_run(run_id: str) -> dict:
     # honest snapshot of in-progress state) but can never pair a
     # terminal lifecycle with an incomplete unit list.
     lifecycle = record.lifecycle
+    # Already normalized by weaver.agent.result_view.normalize_unit_result
+    # (RunManager.list_units) -- one shape for a single-program
+    # Orchestrator run and a multi-program LeafOrchestrator run alike, so
+    # this handler does no reshaping of its own (§1.2).
     units = run_manager.list_units(record)
     metrics = run_manager.metrics_for(record)
+
+    # `programs`: null for an ordinary single-program run (every existing
+    # client keeps reading the flat `units` list exactly as before);
+    # otherwise one row per DAG program with that program's own units and
+    # progress, for the frontend's nested tree (2026-08-26).
+    programs = None
+    if record.request.leaf_first:
+        by_program: dict[str, list[dict]] = {}
+        for u in units:
+            by_program.setdefault(u["program"], []).append(u)
+        programs = [
+            {
+                "program": program_name,
+                "units": program_units,
+                "committed_count": sum(1 for u in program_units if u["status"] == "committed"),
+                "unit_count": len(program_units),
+            }
+            for program_name, program_units in by_program.items()
+        ]
+
     return {
         "run_id": record.run_id,
         "lifecycle": lifecycle,
-        "units": [
-            {
-                "unit_id": u.unit_id, "status": u.status, "model_calls": u.model_calls,
-                "memory_hit": u.memory_hit, "duration_seconds": u.duration_seconds,
-                # Gap 2: the escalation card needs to show why a unit
-                # escalated (defect class, delta, confidence, prior repair
-                # attempts) before a human is asked to accept/reject it.
-                # Serialized verbatim -- null for a unit that hasn't
-                # escalated, never a synthesized placeholder.
-                "diagnostic": dataclasses.asdict(u.diagnostic) if u.diagnostic is not None else None,
-            }
-            for u in units
-        ],
+        "units": units,
+        "programs": programs,
         "metrics": metrics,
         "error": record.error,
     }
@@ -181,6 +224,15 @@ def get_unit_code(run_id: str, unit_id: str) -> dict:
     return run_manager.unit_code(record, unit_id)
 
 
+@app.get("/runs/{run_id}/programs/{program}/units/{unit_id}/code")
+def get_unit_code_in_program(run_id: str, program: str, unit_id: str) -> dict:
+    """Multi-program equivalent of get_unit_code (2026-08-26) -- a nested
+    path segment rather than a composite unit_id, since a paragraph name
+    like MAIN-PARA is not unique across programs in a directory run."""
+    record = run_manager.get_run(run_id)
+    return run_manager.unit_code(record, unit_id, program=program)
+
+
 @app.post("/runs/{run_id}/cancel")
 def cancel_run(run_id: str) -> dict:
     record = run_manager.cancel_run(run_id)
@@ -199,16 +251,41 @@ def resume_run(run_id: str) -> dict:
 @app.get("/runs/{run_id}/divergences/{unit_id}")
 def get_divergences(run_id: str, unit_id: str) -> dict:
     record = run_manager.get_run(run_id)
+    # Already normalized by weaver.agent.result_view.normalize_divergence_report
+    # -- a file-based unit's report passed through verbatim (plus a `kind`
+    # tag), a subprogram unit's witness-shaped divergences rendered under
+    # their own field names. Never reshaped here (§1.2).
     report = run_manager.divergence_report(record, unit_id)
     if report is None:
         raise RunNotFoundError(f"no divergence report for unit {unit_id} on run {run_id}")
-    return json.loads(report.to_json())
+    return report
+
+
+@app.get("/runs/{run_id}/programs/{program}/divergences/{unit_id}")
+def get_divergences_in_program(run_id: str, program: str, unit_id: str) -> dict:
+    """Multi-program equivalent of get_divergences (2026-08-26)."""
+    record = run_manager.get_run(run_id)
+    report = run_manager.divergence_report(record, unit_id, program=program)
+    if report is None:
+        raise RunNotFoundError(f"no divergence report for unit {unit_id} on program {program}, run {run_id}")
+    return report
 
 
 @app.post("/runs/{run_id}/escalations/{unit_id}/decision")
 def post_escalation_decision(run_id: str, unit_id: str, req: EscalationDecisionRequest) -> dict:
     record = run_manager.get_run(run_id)
     return run_manager.decide_escalation(record, unit_id, req.decision, req.body)
+
+
+@app.post("/runs/{run_id}/programs/{program}/escalations/{unit_id}/decision")
+def post_escalation_decision_in_program(run_id: str, program: str, unit_id: str,
+                                          req: EscalationDecisionRequest) -> dict:
+    """Multi-program equivalent of post_escalation_decision (2026-08-26) --
+    re-verifies via verify_subprogram/_verify_mocked for a subprogram unit
+    or a per-program-resolved verify_unit for a file-based one
+    (backend/runs.py's _decide_escalation_multi_program)."""
+    record = run_manager.get_run(run_id)
+    return run_manager.decide_escalation(record, unit_id, req.decision, req.body, program=program)
 
 
 @app.get("/runs/{run_id}/events")

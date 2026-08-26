@@ -76,6 +76,10 @@ class Orchestrator:
     # the 2026-08-12 audit: the backend's lock only serialized its own
     # accesses against each other, not against this thread.
     results_lock: threading.Lock | None = None
+    # Phase AA1 batch-synthesis first drafts (RunSpec.use_batch_synthesis),
+    # unit_id -> Java method body -- populated once, up front, in run(),
+    # never mutated afterwards. Empty unless the flag is set.
+    _batch_draft_bodies: dict[str, str] = field(default_factory=dict, init=False)
 
     @property
     def cobol_source(self) -> Path:
@@ -175,6 +179,22 @@ class Orchestrator:
             )
             self._emit(unit.identifier, "synthesise", "supplied", time.monotonic() - t0,
                         model_calls=0, outcome="ok (candidate supplied)")
+        elif unit.identifier in self._batch_draft_bodies:
+            # Phase AA1 hierarchical batch synthesis already drafted this
+            # unit's body as part of its block's single LLM call (see
+            # _run_batch_synthesis). The repair loop below still runs on
+            # it exactly as it would on any single-paragraph synthesis
+            # result -- a wrong draft gets repaired, not trusted blindly.
+            synth = SynthesisResult(
+                paragraph_id=unit.identifier,
+                body=SynthesizedBody(method_body=self._batch_draft_bodies[unit.identifier],
+                                      assumptions=["hierarchical batch synthesis draft (Phase AA1)"]),
+                validation_attempts=0,
+                prompt="",
+                raw_responses=[],
+            )
+            self._emit(unit.identifier, "synthesise", "batch_draft", time.monotonic() - t0,
+                        model_calls=0, outcome="ok (batch-synthesized draft)")
         else:
             synth = synthesize_paragraph(unit, self.client, spec=self.spec)
             model_calls += synth.validation_attempts
@@ -335,6 +355,8 @@ class Orchestrator:
                 f"({[u.identifier for u in units]}) -- candidate-supplied mode only supports "
                 "single-unit programs"
             )
+        if self.spec.use_batch_synthesis and self.spec.candidate_body_path is None and units:
+            self._run_batch_synthesis(units)
         for unit in units:
             # Checked at a unit boundary only -- never kill mid-unit, which
             # would leave containers running and state inconsistent.
@@ -352,6 +374,31 @@ class Orchestrator:
             self._persist_state()
         self.output_path = self._write_output()
         return self.results
+
+    def _run_batch_synthesis(self, units: list[Paragraph]) -> None:
+        """Phase AA1 (migration-framework-spec.md Section 3.1): draft every
+        unit's body in one topologically-ordered pass of block-sized LLM
+        calls, before the normal per-unit verify/repair loop below runs.
+        Never raises into the run: a batch-synthesis failure (malformed
+        response, a body `static_reject`s) just leaves `_batch_draft_bodies`
+        empty for the affected paragraphs, and `_process_unit` falls back
+        to its ordinary single-paragraph `synthesize_paragraph` call for
+        those -- the exact same "flag rather than invent" posture text
+        refinement's fallback already uses."""
+        from weaver.agent.batch_synthesize import synthesize_hierarchical
+
+        ws_fields = [f.java_name for f in self.spec.scaffold_spec.ws_fields]
+        t0 = time.monotonic()
+        try:
+            result = synthesize_hierarchical(units, self.client, ws_fields, allowed_identifiers={"ws", "ar"})
+        except Exception as exc:  # noqa: BLE001 -- see docstring: never let a batch failure abort the run
+            self._emit("*", "batch_synthesise", "hierarchical", time.monotonic() - t0,
+                        outcome=f"skipped: {exc}")
+            return
+        self._batch_draft_bodies = dict(result.bodies)
+        self._emit("*", "batch_synthesise", "hierarchical", time.monotonic() - t0,
+                    outcome=f"{len(result.blocks)} block(s), {len(result.bodies)} draft body(ies), "
+                            f"had_cycle={result.had_cycle}")
 
     def _write_output(self) -> Path | None:
         """Write the fully-assembled migrated program to spec.out_dir --

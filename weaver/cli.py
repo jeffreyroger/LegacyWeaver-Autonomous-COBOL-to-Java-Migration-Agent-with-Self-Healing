@@ -81,6 +81,14 @@ def build_parser() -> argparse.ArgumentParser:
                          help="Opt-in hosted gpt-4o-mini refinement pass after synthesis (requires OPENAI_API_KEY)")
     migrate.add_argument("--use-delta-debugging", action="store_true",
                          help="Opt-in ddmin-based minimal counterexample selection during repair")
+    migrate.add_argument("--use-batch-synthesis", action="store_true",
+                         help="Opt-in hierarchical segment-and-merge synthesis (migration-framework-"
+                              "spec.md Section 3.1): draft every unit's body in topologically-ordered, "
+                              "block-sized LLM calls before the normal per-unit repair loop runs")
+    migrate.add_argument("--redefines-as-subclasses", action="store_true",
+                         help="Generate a REDEFINES overlay as a subclass over a shared byte[] "
+                              "buffer (FR-12.1-12.3) instead of the default flattened-accessor "
+                              "style; opt-in, does not change interest.cob's generated output")
     migrate.add_argument("--leaf-first", action="store_true",
                          help="Run the leaf-first cross-program DAG pipeline "
                               "(migration-framework-spec.md Section 5); 'program' must be a "
@@ -312,6 +320,9 @@ def build_migrate_spec(args: argparse.Namespace) -> RunSpec:
     """
     defaults = RunSpec.default()
     profile = _program_profile(args.program)
+    scaffold_spec = (profile.scaffold_spec if profile else None) or defaults.scaffold_spec
+    if getattr(args, "redefines_as_subclasses", False):
+        scaffold_spec = dataclasses.replace(scaffold_spec, redefines_as_subclasses=True)
     return RunSpec(
         cobol_source=args.program,
         copybook_dir=args.copybook,
@@ -323,13 +334,14 @@ def build_migrate_spec(args: argparse.Namespace) -> RunSpec:
         reference_body_path=(profile.reference_body_path if profile else None) or defaults.reference_body_path,
         reference_paragraph_id=(profile.reference_paragraph_id if profile else None)
                                 or defaults.reference_paragraph_id,
-        scaffold_spec=(profile.scaffold_spec if profile else None) or defaults.scaffold_spec,
+        scaffold_spec=scaffold_spec,
         max_repairs=args.max_repairs,
         model=args.model,
         seed=args.seed,
         replay=args.replay,
         use_text_refinement=args.use_text_refinement,
         use_delta_debugging=args.use_delta_debugging,
+        use_batch_synthesis=args.use_batch_synthesis,
     )
 
 
@@ -422,11 +434,20 @@ def run_migrate_leaf_first(args: argparse.Namespace) -> int:
     -- drive weaver.agent.leaf_orchestrator.LeafOrchestrator over a
     directory of *.cob files in DAG leaf-first order, instead of the
     single-program Orchestrator. 'program' is reinterpreted as that
-    directory. Does not yet support cooperative Ctrl-C cancellation or
-    live event streaming (LeafOrchestrator has no cancel_requested/on_event
-    parameters) -- a disclosed gap versus the single-program path below.
+    directory.
+
+    `run_dir=run_dir` (2026-08-26) gives LeafOrchestrator's own combined
+    trace + flat, composite-id-keyed orchestrator_state.json under this
+    run's directory -- the same on-disk shape `weaver report <run_dir>`
+    already reads for a single-program run, so it works here unmodified
+    (weaver/agent/metrics.py needs no multi-program awareness at all).
+    LeafOrchestrator does now accept cancel_requested/on_event
+    (weaver/agent/leaf_orchestrator.py), but this CLI path does not yet
+    wire a signal handler to them -- Ctrl-C here still raises
+    KeyboardInterrupt mid-program, uncleanly, same as before.
     """
     from weaver.agent.leaf_orchestrator import LeafOrchestrator
+    from weaver.agent.result_view import all_committed, normalize_unit_result
 
     if not args.program.is_dir():
         console.print(f"[red]--leaf-first requires 'program' to be a directory of *.cob files, "
@@ -440,7 +461,7 @@ def run_migrate_leaf_first(args: argparse.Namespace) -> int:
     (run_dir / "params.json").write_text(json.dumps(base_spec.to_dict(), indent=2), encoding="utf-8")
 
     orchestrator = LeafOrchestrator(program_dir=args.program, base_spec=base_spec,
-                                     work_root=run_dir / "leaf_orchestrator")
+                                     work_root=run_dir / "leaf_orchestrator", run_dir=run_dir)
     try:
         results = orchestrator.run()
     except KeyboardInterrupt:
@@ -448,16 +469,14 @@ def run_migrate_leaf_first(args: argparse.Namespace) -> int:
                        "the current program's run was interrupted uncleanly.[/yellow]")
         return 130
 
-    all_committed = all(
-        r.status == "committed" for program_results in results.values() for r in program_results.values()
-    )
-    exit_code = 0 if all_committed else 1
+    exit_code = 0 if all_committed(results) else 1
 
     if args.json:
         print(json.dumps({
             "run_dir": str(run_dir),
             "programs": {
-                program_name: {uid: dataclasses.asdict(r) for uid, r in program_results.items()}
+                program_name: {uid: normalize_unit_result(r, program_name=program_name)
+                                for uid, r in program_results.items()}
                 for program_name, program_results in results.items()
             },
             "exit_code": exit_code,

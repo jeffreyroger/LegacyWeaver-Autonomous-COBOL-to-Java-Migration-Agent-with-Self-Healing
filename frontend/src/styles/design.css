@@ -391,6 +391,20 @@
   .unit-status { font-size: 11.5px; color: var(--ink-3); flex: none; font-variant-numeric: tabular-nums; }
   .unit-row.done .unit-status { color: var(--ok); }
 
+  /* Multi-program (leaf-first DAG) run tree, 2026-08-26 -- one .unit-group
+     per DAG program, each containing that program's own .unit-row(s). A
+     single-program run never renders a .unit-group-header at all, so this
+     adds no visual change there (.unit-row keeps its existing flat style). */
+  .unit-group:not(:last-child) { border-bottom: 1px solid var(--line); }
+  .unit-group-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 14px; background: var(--surface-2);
+    font-family: var(--mono); font-size: 11px; font-weight: 600;
+    letter-spacing: .02em; color: var(--ink-2); text-transform: uppercase;
+  }
+  .unit-group-progress { font-variant-numeric: tabular-nums; color: var(--ink-3); text-transform: none; }
+  .unit-row-nested { padding-left: 28px; }
+
   /* --- bento results --- */
   .bento {
     flex: 1 1 auto; min-height: 0; overflow: auto; padding: 12px;

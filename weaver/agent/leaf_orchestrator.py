@@ -55,13 +55,18 @@ stub lookup.
 
 from __future__ import annotations
 
+import contextlib
+import json
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
 
 from weaver.agent.orchestrator import Orchestrator
+from weaver.agent.result_view import composite_id, normalize_program_results
 from weaver.agent.runspec import RunSpec
+from weaver.atomic_json import write_json_atomic
 from weaver.cobol.program_dag import from_directory
 
 OrchestratorFactory = Callable[[RunSpec], Orchestrator]
@@ -74,10 +79,6 @@ DEFAULT_SUBPROGRAM_WITNESSES = [
     Decimal("100.00"), Decimal("250.50"), Decimal("0.00"),
     Decimal("9999.99"), Decimal("1.01"), Decimal("12345.67"),
 ]
-
-
-def _default_orchestrator_factory(spec: RunSpec) -> Orchestrator:
-    return Orchestrator(spec=spec)
 
 
 def _program_kind(cobol_source: Path) -> str:
@@ -101,6 +102,43 @@ class LeafOrchestrator:
     # for every program, preserving Task 8's original tests unmodified.
     orchestrator_factory: OrchestratorFactory | None = None
     work_root: Path = field(default_factory=lambda: Path("generated/leaf_orchestrator"))
+    # Backend attachment points, added 2026-08-26 for multi-program runs
+    # (docs/specs/BACKEND_PLAN.md has no multi-program section yet -- this
+    # mirrors weaver.agent.orchestrator.Orchestrator's own on_event/
+    # cancel_requested/results_lock signature exactly, so the two read
+    # alike). All optional and None by default: an existing caller that
+    # never sets them (every current test, weaver/cli.py before this
+    # change) gets byte-identical behavior.
+    #
+    # run_dir, when set, is where this run's OWN combined trace/state live
+    # (run_dir/trace.jsonl, run_dir/orchestrator_state.json) and where each
+    # DAG node's nested orchestrator gets its own
+    # run_dir/programs/<NAME>/{trace.jsonl,orchestrator_state.json} --
+    # fixing a real pre-existing bug: _default_orchestrator_factory built
+    # Orchestrator(spec=spec) with no explicit trace_path/state_path, so
+    # every file-based node in one directory shared
+    # generated/trace.jsonl/generated/orchestrator_state.json, and
+    # Orchestrator's fresh_trace=True default TRUNCATES that shared file on
+    # construction -- the second file-based program in a directory silently
+    # wiped the first one's trace and state. When run_dir is None (every
+    # caller before this change), that old shared-default behavior is
+    # unchanged; this is opt-in via passing run_dir, not a default change.
+    run_dir: Path | None = None
+    on_event: Callable[[dict], None] | None = None
+    cancel_requested: threading.Event | None = None
+    results_lock: threading.Lock | None = None
+    # DAG-level resume (2026-08-26): program_name -> that program's
+    # ALREADY-COMMITTED {unit_id: raw_result} dict from a prior,
+    # interrupted attempt at this same run_dir (backend/runs.py's
+    # resume_run reconstructs this from orchestrator_state.json exactly
+    # the way the single-program Orchestrator resume path already does).
+    # A listed program is never re-run or re-verified (BACKEND_PLAN.md
+    # §4.5, "committed units are not re-verified") -- run() just adopts
+    # its result and reconstructs verified_children/call_semantics from
+    # artefacts already on disk (see _skip_committed_program). None (the
+    # default) means "fresh run, nothing to skip" -- every caller before
+    # this field existed is unaffected.
+    resume_committed: dict[str, dict[str, object]] | None = None
     # program name -> its per-program run's UnitCache directory, once that
     # program's run has committed every unit (FR-13.3 stub source).
     verified_children: dict[str, Path] = field(default_factory=dict, init=False)
@@ -119,11 +157,73 @@ class LeafOrchestrator:
         dag = from_directory(self.program_dir)
         for layer in dag.topological_order():
             for program_name in layer:
-                self._run_one(program_name, dag)
+                # Checked at a PROGRAM boundary -- never mid-program, which
+                # would leave a nested orchestrator's containers running
+                # and its state inconsistent. The same threading.Event is
+                # also handed straight to each nested Orchestrator (see
+                # _run_file_based), which additionally checks it at its own
+                # UNIT boundary -- both granularities, one mechanism.
+                if self.cancel_requested is not None and self.cancel_requested.is_set():
+                    return self.program_results
+                if self.resume_committed and program_name in self.resume_committed:
+                    self._skip_committed_program(program_name)
+                else:
+                    self._run_one(program_name, dag)
+                # Checkpoint after this program's run is fully terminal,
+                # never before (BACKEND_PLAN.md §4.5's "checkpoint after
+                # commit, not before", applied at program granularity).
+                self._persist_state()
         return self.program_results
 
+    def _skip_committed_program(self, program_name: str) -> None:
+        """DAG-level resume: adopt a program's already-committed result
+        from a prior interrupted attempt, without re-running or
+        re-verifying it (BACKEND_PLAN.md §4.5). `verified_children`/
+        `call_semantics` -- the two pieces of state a LATER, still-to-run
+        program in this same DAG might depend on -- are reconstructed from
+        real artefacts already persisted to disk by the interrupted
+        attempt (the shared subprogram UnitCache directory), never
+        fabricated: if that cache is missing or stale, this program's
+        downstream callers simply get no stub/CALL-semantics context, the
+        same honest degrade a fresh run gets on any other cache miss."""
+        with self._results_guard():
+            self.program_results[program_name] = self.resume_committed[program_name]
+
+        cobol_file = self.resolve_source_file(program_name)
+        if _program_kind(cobol_file) != "subprogram":
+            return
+        cache_dir = self.work_root / "unit_cache"
+        from weaver.agent import unit_cache
+        from weaver.cobol.subprogram import load_subprogram
+
+        model = load_subprogram(cobol_file)
+        program_source = model.source_path.read_text(encoding="utf-8")
+        cache = unit_cache.load_valid(cache_dir, cobol_file.stem, model.paragraph_id,
+                                       program_source, model.paragraph_source)
+        if cache is None:
+            return
+        self.verified_children[program_name] = cache_dir
+        self.call_semantics[program_name] = self._render_call_semantics(program_name, model, cache.fixtures)
+
+    def _persist_state(self) -> None:
+        """Flat, composite-id-keyed checkpoint of every unit committed or
+        escalated so far, written to run_dir/orchestrator_state.json --
+        the same on-disk shape a single-program Orchestrator writes, so
+        weaver/agent/metrics.py's compute_metrics reads a multi-program
+        run's state file completely unmodified. A no-op when this
+        LeafOrchestrator wasn't given a run_dir (every caller before
+        2026-08-26, including every existing test)."""
+        if self.run_dir is None:
+            return
+        with self._results_guard():
+            flat = normalize_program_results(self.program_results)
+        write_json_atomic(self.run_dir / "orchestrator_state.json", flat)
+
+    def _results_guard(self):
+        return self.results_lock if self.results_lock is not None else contextlib.nullcontext()
+
     def _run_one(self, program_name: str, dag) -> None:
-        cobol_file = self._resolve_source_file(program_name)
+        cobol_file = self.resolve_source_file(program_name)
         # Stub availability: this program's own CALLees (per the DAG) that
         # have already committed become available via unit_cache_dir --
         # only meaningful when the program actually calls an already-
@@ -149,11 +249,46 @@ class LeafOrchestrator:
         )
         orchestrator = self.orchestrator_factory(program_spec)
         results = orchestrator.run()
-        self.program_results[program_name] = results
+        with self._results_guard():
+            self.program_results[program_name] = results
         if results and all(r.status == "committed" for r in results.values()):
             cache_dir = getattr(orchestrator.spec, "unit_cache_dir", None)
             if cache_dir is not None:
                 self.verified_children[program_name] = cache_dir
+
+    def _program_dir(self, program_name: str) -> Path:
+        """Where this program's own artefacts (trace/state, subprogram
+        verify workspace) live for this run. Under run_dir when the
+        backend gave us one (multi-program runs get real isolation);
+        under the old work_root otherwise -- unchanged for every caller
+        before 2026-08-26."""
+        base = (self.run_dir / "programs") if self.run_dir is not None else self.work_root
+        return base / program_name
+
+    def _make_on_event(self, program_name: str) -> Callable[[dict], None] | None:
+        """Wraps this program's nested orchestrator's on_event so every
+        event it emits is stamped with `program`/`composite_id` before
+        being appended to the run's OWN combined trace and forwarded to
+        the backend's on_event -- the `program` field originates here, in
+        the agent, never invented by the backend (BACKEND_PLAN.md §4.3:
+        events forwarded verbatim). A no-op (returns None) when this
+        LeafOrchestrator has no run_dir, since there is nowhere to write
+        a combined trace and no caller listening anyway."""
+        if self.run_dir is None:
+            return None
+        combined_trace_path = self.run_dir / "trace.jsonl"
+        combined_trace_path.parent.mkdir(parents=True, exist_ok=True)
+
+        def _on_event(event: dict) -> None:
+            stamped = dict(event)
+            stamped["program"] = program_name
+            stamped["composite_id"] = composite_id(program_name, event.get("unit", ""))
+            with combined_trace_path.open("a") as f:
+                f.write(json.dumps(stamped) + "\n")
+            if self.on_event is not None:
+                self.on_event(stamped)
+
+        return _on_event
 
     def _call_semantics_for(self, program_name: str, dag) -> str:
         callee_names = {e.callee for e in dag.edges if e.caller == program_name}
@@ -189,22 +324,50 @@ class LeafOrchestrator:
             **profile_kwargs,
             **({"unit_cache_dir": stub_dir, "use_unit_cache": True} if stub_dir is not None else {}),
         )
-        orchestrator = _default_orchestrator_factory(program_spec)
+        # Real dispatch's own trace/state paths (fixing the pre-existing
+        # shared-generated/trace.jsonl clobbering bug -- see this
+        # dataclass's run_dir field docstring): only overridden when this
+        # LeafOrchestrator has a run_dir; otherwise Orchestrator's own
+        # defaults apply exactly as before 2026-08-26.
+        orchestrator_kwargs: dict[str, object] = {"spec": program_spec}
+        # cancel_requested/results_lock propagate regardless of run_dir --
+        # they need no path to write to, only the same shared objects this
+        # LeafOrchestrator itself was given. trace_path/state_path/
+        # on_event DO need run_dir (somewhere real to write), so those
+        # stay gated on it.
+        if self.cancel_requested is not None:
+            orchestrator_kwargs["cancel_requested"] = self.cancel_requested
+        if self.results_lock is not None:
+            orchestrator_kwargs["results_lock"] = self.results_lock
+        if self.run_dir is not None:
+            program_dir = self._program_dir(program_name)
+            orchestrator_kwargs.update(
+                trace_path=program_dir / "trace.jsonl",
+                state_path=program_dir / "orchestrator_state.json",
+                on_event=self._make_on_event(program_name),
+            )
+        orchestrator = Orchestrator(**orchestrator_kwargs)
         results = orchestrator.run()
-        self.program_results[program_name] = results
+        with self._results_guard():
+            self.program_results[program_name] = results
         if results and all(r.status == "committed" for r in results.values()):
             cache_dir = getattr(orchestrator.spec, "unit_cache_dir", None)
             if cache_dir is not None:
                 self.verified_children[program_name] = cache_dir
 
-    def _witnesses_for(self, model, program_work_dir: Path) -> list[Decimal]:
+    def _witnesses_for(self, model, program_work_dir: Path, mocked: bool = False) -> list[Decimal]:
         """Phase X8: real witness-search algorithms by default
         (`RunSpec.use_witness_search`), falling back to the fixed,
         hand-verified `DEFAULT_SUBPROGRAM_WITNESSES` set when disabled or
         when the model has more than one input field (multi-field
         subprograms aren't yet wired into SubprogramOrchestrator's
-        single-scalar witness API -- see witness_search.witnesses_for_subprogram)."""
-        if not self.base_spec.use_witness_search or len(model.input_params) != 1:
+        single-scalar witness API -- see witness_search.witnesses_for_subprogram).
+
+        Always falls back for a mocked (EXEC SQL/EXEC CICS) subprogram
+        (Phase Z1/Z3, 2026-08-26): `make_oracle_fn` compiles the RAW source
+        with `cobc`, which cannot compile an EXEC SQL/CICS block at all --
+        witness search would just crash setting up its own oracle driver."""
+        if mocked or not self.base_spec.use_witness_search or len(model.input_params) != 1:
             return DEFAULT_SUBPROGRAM_WITNESSES
         from weaver.agent.subprogram_verify import make_oracle_fn
         from weaver.agent.witness_search import witnesses_for_subprogram
@@ -221,11 +384,14 @@ class LeafOrchestrator:
         from weaver.agent import unit_cache
         from weaver.agent.subprogram_orchestrator import SubprogramOrchestrator
         from weaver.agent.subprogram_verify import harvest_subprogram_fixtures
+        from weaver.cobol.mock_directives import find_mock_directives
         from weaver.cobol.subprogram import load_subprogram
 
-        program_work_dir = self.work_root / program_name
+        program_work_dir = self._program_dir(program_name)
         model = load_subprogram(cobol_file)
-        witnesses = self._witnesses_for(model, program_work_dir)
+        program_source = model.source_path.read_text(encoding="utf-8")
+        mocked = bool(find_mock_directives(program_source))
+        witnesses = self._witnesses_for(model, program_work_dir, mocked=mocked)
 
         orch = SubprogramOrchestrator(
             cobol_source=cobol_file,
@@ -233,13 +399,21 @@ class LeafOrchestrator:
             spec=self.base_spec,
             trace_path=program_work_dir / "trace.jsonl",
             work_dir=program_work_dir / "verify",
+            on_event=self._make_on_event(program_name),
         )
         result = orch.run()
-        self.program_results[program_name] = {result.program_id: result}
+        with self._results_guard():
+            self.program_results[program_name] = {result.program_id: result}
 
         if result.status != "committed":
             return
-        program_source = model.source_path.read_text(encoding="utf-8")
+        if mocked:
+            # Dynamic Mocking subprograms (Phase Z1) have no real unmocked
+            # `cobc` oracle to harvest fixtures from (see _witnesses_for) --
+            # they commit via the Parity Gate above but don't yet propagate
+            # CALL semantics upstream. Out of scope here: no file-based
+            # fixture in this project calls a mocked subprogram today.
+            return
         fixtures = harvest_subprogram_fixtures(
             model, witnesses, program_work_dir / "harvest"
         )
@@ -326,7 +500,7 @@ class LeafOrchestrator:
             return None
         return next(iter(dirs))
 
-    def _resolve_source_file(self, program_name: str) -> Path:
+    def resolve_source_file(self, program_name: str) -> Path:
         for cob_file in sorted(self.program_dir.glob("*.cob")):
             text = cob_file.read_text(encoding="utf-8")
             if f"PROGRAM-ID. {program_name}" in text.upper() or f"PROGRAM-ID.{program_name}" in text.upper():
